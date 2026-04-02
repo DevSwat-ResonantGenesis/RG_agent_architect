@@ -384,6 +384,116 @@ MODERATE_RISK_PATTERNS = [
 ]
 
 # ═══════════════════════════════════════════════════════════════
+# GOAL CRAFTING — Twin's 8-step pipeline
+# ═══════════════════════════════════════════════════════════════
+
+GOAL_CRAFTING_PROMPT = """You are an expert goal crafter for autonomous AI agents.
+Follow this 8-step pipeline EXACTLY to transform the user's raw request into a precise, buildable agent specification.
+
+USER'S RAW REQUEST: "{message}"
+
+USER CONTEXT:
+- Memory: {memory_facts}
+- Existing agents: {existing_agents}
+- Available platform tools: {tools_summary}
+
+PIPELINE (follow each step):
+
+1. EXTRACT CORE OUTCOME — What concrete result should exist after ONE execution?
+2. IDENTIFY SERVICES — Which specific platform tools are needed? Match to available tools below.
+3. STRIP RECURRENCE — Remove "every day/daily/weekly/hourly/morning/evening" from goal. Note schedule separately.
+4. STRIP SECRETS — Never include passwords, API keys, or tokens in the goal.
+5. SMART DEFAULTS — Fill every gap with reasonable assumptions. LIST each assumption explicitly.
+6. COMPOSE GOAL — Write 2-3 outcome-oriented sentences. Name specific services. Clear output destination.
+7. SCOPE RISK — Evaluate: "safe", "moderate", or "high".
+   HIGH: entity discovery across broad domains, per-entity HTTP/scrape calls, geographic fan-out, unbounded lead gen/data mining
+   MODERATE: implicit large scope that could be bounded, multi-step pipelines where each step multiplies the next
+   SAFE: single API calls, explicit small bounds ("top 10"), single known entity targets, monitoring single sources
+8. AUTH NEEDS — List any OAuth integrations the user must connect (google_calendar, gmail, slack, github, etc.)
+
+AVAILABLE TOOLS:
+  Search: web_search, fetch_url, read_webpage, read_many_pages, news_search, reddit_search, youtube_search, deep_research, wikipedia, places_search, image_search
+  Memory: memory_read, memory_write, memory_search
+  Code: execute_code, code_visualizer_scan, code_visualizer_functions
+  Agents: agents_list, agents_create, agents_start, agents_sessions, schedule_agent
+  Media: generate_image, generate_audio, generate_music
+  Integrations: gmail_send, gmail_read, slack_send, slack_read, google_calendar, google_drive, figma
+  Community: create_rabbit_post, list_rabbit_communities, search_rabbit_posts
+  Developer: execute_code, http_request, external_http_request
+  GitHub: github_create_repo, github_list_repos, github_list_files, github_download_file, github_upload_file, github_pull_request, github_issue
+  Email: send_email
+  Utilities: weather, stock_crypto, generate_chart, get_current_time
+  Filesystem: file_read, file_write, file_edit, file_list
+
+EXAMPLES of bad → good goals:
+  Bad: "Keep me updated on tech news"
+  Good: "Collect the top 10 HackerNews stories and trending GitHub repos in AI/ML, compile a briefing with summaries and links, and store it in memory."
+
+  Bad: "Help me with sales"
+  Good: "Check the pipeline for deals without activity in 3+ days, draft a personalized follow-up for each, and save drafts to Google Drive."
+
+  Bad: "Search Reddit daily"
+  Good: "Search r/startups, r/SaaS, and r/Entrepreneur for posts mentioning AI agents, compile a summary with engagement metrics and direct links."
+
+Respond with ONLY valid JSON:
+{{
+  "crafted_goal": "2-3 sentence outcome-oriented goal with NO recurrence language",
+  "agent_name": "Descriptive Agent Name",
+  "description": "1-sentence agent purpose",
+  "system_prompt_hint": "You are [role]. Your job is [specific behavior]. Always [constraints].",
+  "tools_needed": ["tool1", "tool2"],
+  "provider": "groq",
+  "model": "llama-3.3-70b-versatile",
+  "temperature": 0.6,
+  "schedule": null,
+  "schedule_label": null,
+  "scope_risk": "safe",
+  "scope_risk_reason": null,
+  "scope_risk_scale": null,
+  "assumptions": ["assumption 1"],
+  "auth_needed": [],
+  "auth_warning": null,
+  "reasoning": "Brief explanation of approach and trade-offs"
+}}
+
+SCHEDULE FORMAT (only if recurrence detected in user request):
+  "schedule": {{"interval_seconds": 86400}},
+  "schedule_label": "daily"
+
+Common intervals: hourly=3600, daily=86400, weekly=604800
+
+RULES:
+- Choose tools based on ACTUAL need — don't add web_search to everything
+- Choose provider/model matching task complexity (groq/llama-3.3-70b-versatile for 90%% of tasks, openai/gpt-4o for complex reasoning)
+- GOAL must describe WHAT happens in ONE execution, not how often
+- Be opinionated about smart defaults — never produce a generic agent
+- Include EVERY assumption in the assumptions array
+- If task needs OAuth service → list in auth_needed and explain in auth_warning"""
+
+
+# ═══════════════════════════════════════════════════════════════
+# USER FACTS EXTRACTION — memory management
+# ═══════════════════════════════════════════════════════════════
+
+USER_FACTS_PROMPT = """Extract any personal facts about the user from this message.
+Facts include: name, role/title, company, industry, location, timezone, tools they use, preferences, pain points, or goals.
+
+MESSAGE: "{message}"
+
+EXISTING MEMORY: {memory_facts}
+
+If no NEW facts found (or facts already in memory), respond: {{"facts": []}}
+If new facts found, respond:
+{{
+  "facts": [
+    {{"key": "role", "value": "software engineer", "sentence": "User is a software engineer"}}
+  ]
+}}
+
+Only extract EXPLICIT facts stated in the message. Do not infer or guess. Respond with JSON only."""
+
+
+# ═══════════════════════════════════════════════════════════════
 # SYSTEM PROMPT BUILDER — assembles full orchestrator prompt
 # ═══════════════════════════════════════════════════════════════
 

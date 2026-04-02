@@ -10,6 +10,9 @@ from .prompts import (
     INTENT_CLASSIFY_PROMPT,
     HIGH_RISK_PATTERNS,
     MODERATE_RISK_PATTERNS,
+    GOAL_CRAFTING_PROMPT,
+    USER_FACTS_PROMPT,
+    build_system_prompt,
 )
 from .llm_client import llm_fast, llm_json
 from .context import fetch_workspace_context, store_memory
@@ -46,30 +49,37 @@ async def orchestrate(
     headers: dict[str, str],
     user_api_keys: dict | None = None,
 ) -> dict:
-    """Main orchestration entry point. Called by the /orchestrate endpoint.
+    """Twin-level orchestration entry point.
 
     Flow:
-    1. Fetch workspace context (agents, tools, memory) in parallel
-    2. Check if this is a confirmation of a prior plan
-    3. Classify intent
-    4. Route to appropriate handler
-    5. Return structured response with summary + follow-up options
+    1. Fetch workspace context (agents, tools, memory) — 3 parallel calls
+    2. Extract and store user facts from message (memory management)
+    3. Check if this is a confirmation of a prior plan
+    4. Classify intent
+    5. Route to appropriate handler
+    6. ALWAYS return structured response with follow-up options
     """
     logger.info(f"🏗️ [ORCHESTRATE] Message: {message[:120]!r}")
 
-    # Step 0: Context Protocol — gather workspace state
+    # Step 0: Context Protocol — gather workspace state (Twin: 3 parallel calls)
     workspace = await fetch_workspace_context(user_id, headers)
     agents = workspace.get("agents", [])
     agent_count = len(agents)
 
     logger.info(f"🏗️ [ORCHESTRATE] Context: {agent_count} agents, tools={workspace.get('tools_summary')}")
 
+    # Step 0.5: Memory management — extract and store user facts
+    await _extract_and_store_user_facts(message, user_id, workspace.get("memory_facts", ""), user_api_keys)
+
     # Step 1: Check confirmation
     if _is_confirmation(message, context):
         original = _extract_original_request(context)
+        # Retrieve crafted goal metadata from context if available
+        crafted_meta = context.get("crafted_goal_meta")
         logger.info(f"🏗️ [ORCHESTRATE] Confirmation → build: {original[:100]!r}")
         return await _handle_build_execute(
             original, user_id, headers, user_api_keys, workspace, agents,
+            crafted_meta=crafted_meta,
         )
 
     # Step 2: Classify intent
@@ -78,7 +88,7 @@ async def orchestrate(
 
     # Step 3: Route by intent
     if intent == "BRAINSTORM":
-        return await _handle_brainstorm(message, agents, workspace, user_api_keys)
+        return await _handle_brainstorm(message, user_id, agents, workspace, user_api_keys)
     if intent == "REVIEW":
         return _handle_review(agents)
     if intent == "MODIFY":
@@ -90,7 +100,7 @@ async def orchestrate(
     if intent == "SCHEDULE":
         return await _handle_schedule(message, agents, headers)
 
-    # BUILD intent: Phase 1 — plan preview
+    # BUILD intent: Phase 1 — goal crafting + plan preview
     return await _handle_build_preview(
         message, user_id, headers, user_api_keys, workspace, agents,
     )
@@ -233,7 +243,101 @@ def _assess_scope_risk(message: str) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-# HANDLER: BUILD PREVIEW (Phase 1)
+# TWIN-LEVEL: GOAL CRAFTING PIPELINE (8 steps)
+# ═══════════════════════════════════════════════════════════════
+
+async def _craft_goal(
+    message: str,
+    workspace: dict,
+    agents: list[dict],
+    user_api_keys: dict | None = None,
+) -> dict | None:
+    """Twin's 8-step goal crafting pipeline via LLM.
+
+    Returns dict with: crafted_goal, agent_name, tools_needed, schedule,
+    scope_risk, assumptions, auth_needed, auth_warning, reasoning, etc.
+    """
+    memory_facts = workspace.get("memory_facts", "No saved context yet")
+    tools_summary = workspace.get("tools_summary", "160+ tools available")
+    agents_str = "Fresh workspace — no agents yet."
+    if agents:
+        descs = [f"- {a['name']} ({a.get('model', '?')}, tools: {', '.join(a.get('tools', [])[:4])})" for a in agents[:10]]
+        agents_str = "\n".join(descs)
+
+    prompt = GOAL_CRAFTING_PROMPT.format(
+        message=message[:500],
+        memory_facts=memory_facts or "No saved context yet",
+        existing_agents=agents_str,
+        tools_summary=tools_summary,
+    )
+    system = build_system_prompt()
+
+    result = await llm_json(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+        max_tokens=1500,
+        user_api_keys=user_api_keys,
+        timeout=20.0,
+    )
+
+    if result and result.get("crafted_goal"):
+        logger.info(f"🎯 [GOAL] Crafted: {result['crafted_goal'][:100]}")
+        return result
+
+    logger.warning("[GOAL] Goal crafting failed, falling back to raw message")
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════
+# TWIN-LEVEL: MEMORY MANAGEMENT
+# ═══════════════════════════════════════════════════════════════
+
+async def _extract_and_store_user_facts(
+    message: str,
+    user_id: str,
+    existing_memory: str,
+    user_api_keys: dict | None = None,
+) -> None:
+    """Twin-style: extract user facts from message and store in memory.
+
+    Runs in background — never blocks the main flow. Stores facts like
+    name, role, company, industry, location, preferences.
+    """
+    # Skip short messages or commands
+    msg_clean = re.sub(r"^agent\s*architect\s*:\s*", "", message.lower().strip())
+    if len(msg_clean) < 15 or msg_clean in ("yes", "no", "yes, build it", "go ahead", "build it"):
+        return
+
+    try:
+        prompt = USER_FACTS_PROMPT.format(
+            message=message[:300],
+            memory_facts=existing_memory or "No existing memory",
+        )
+        result = await llm_json(
+            [{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=200,
+            user_api_keys=user_api_keys,
+            timeout=8.0,
+        )
+        if result and result.get("facts"):
+            for fact in result["facts"][:5]:
+                sentence = fact.get("sentence") or f"User {fact.get('key', '?')}: {fact.get('value', '?')}"
+                await store_memory(
+                    user_id,
+                    sentence,
+                    {"type": "user_fact", "key": fact.get("key"), "value": fact.get("value")},
+                )
+                logger.info(f"🧠 [MEMORY] Stored: {sentence[:80]}")
+    except Exception as e:
+        logger.debug(f"[MEMORY] Facts extraction failed (non-critical): {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# HANDLER: BUILD PREVIEW (Phase 1 — Twin Goal Crafting)
 # ═══════════════════════════════════════════════════════════════
 
 async def _handle_build_preview(
@@ -244,56 +348,91 @@ async def _handle_build_preview(
     workspace: dict,
     agents: list[dict],
 ) -> dict:
-    """Phase 1: Generate blueprint, show plan preview, wait for confirmation."""
-    risk = _assess_scope_risk(message)
-    platform_ctx = f"Resonant Genesis — AI agent platform ({workspace.get('tools_summary', '160+ tools')})"
-    if workspace.get("memory_facts"):
-        platform_ctx += f"\nUser info: {workspace['memory_facts'][:300]}"
+    """Phase 1 — Twin Goal Crafting Pipeline.
 
-    agents_str = "None yet"
-    if agents:
-        descs = [f"- {a['name']} ({a.get('model', '?')}, tools: {', '.join(a.get('tools', [])[:5])})" for a in agents[:10]]
-        agents_str = "\n".join(descs)
+    1. Run 8-step goal crafting via LLM
+    2. Present refined goal in blockquote
+    3. Show assumptions, auth warnings, scope risk
+    4. Wait for confirmation before building
+    """
+    # Step 1: Craft goal using Twin's 8-step pipeline
+    crafted = await _craft_goal(message, workspace, agents, user_api_keys)
 
-    blueprint = await generate_blueprint(message, user_api_keys, platform_ctx, agents_str)
-
-    if not blueprint or "agents" not in blueprint:
-        # LLM planning failed — skip to direct build
+    if not crafted:
+        # Goal crafting failed — fall back to direct blueprint + build
         return await _handle_build_execute(message, user_id, headers, user_api_keys, workspace, agents)
 
-    # Build plan preview summary
-    bp_agents = blueprint.get("agents", [])
-    reasoning = blueprint.get("reasoning", "")
-    assumptions = blueprint.get("assumptions", [])
+    agent_name = crafted.get("agent_name", "Agent")
+    crafted_goal = crafted.get("crafted_goal", message)
+    description = crafted.get("description", "")
+    tools_needed = crafted.get("tools_needed", [])
+    reasoning = crafted.get("reasoning", "")
+    assumptions = crafted.get("assumptions", [])
+    schedule = crafted.get("schedule")
+    schedule_label = crafted.get("schedule_label")
+    scope_risk = crafted.get("scope_risk", "safe")
+    scope_risk_reason = crafted.get("scope_risk_reason")
+    scope_risk_scale = crafted.get("scope_risk_scale")
+    auth_needed = crafted.get("auth_needed", [])
+    auth_warning = crafted.get("auth_warning")
+    model = crafted.get("model", "llama-3.3-70b-versatile")
+    provider = crafted.get("provider", "groq")
 
-    summary = f"**Plan Preview** — {len(bp_agents)} agent(s)\n\n"
+    # Also check regex-based scope risk
+    regex_risk = _assess_scope_risk(message)
+    if regex_risk["level"] == "high" and scope_risk == "safe":
+        scope_risk = "high"
+        scope_risk_reason = regex_risk["reason"]
+
+    # Step 2: Build the goal presentation (Twin-style blockquote)
+    summary = f"**{agent_name}**\n\n"
     if reasoning:
         summary += f"*{reasoning}*\n\n"
-    summary += "---\n\n"
 
-    for i, bp in enumerate(bp_agents):
-        summary += f"**{i+1}. {bp.get('name', 'Agent')}**\n"
-        summary += f"   {bp.get('description', '')}\n"
-        summary += f"   🎯 {bp.get('goal', 'No goal specified')[:120]}\n"
-        summary += f"   Model: `{bp.get('provider', 'groq')}/{bp.get('model', 'llama-3.3-70b-versatile')}`\n"
-        summary += f"   Tools: {', '.join(bp.get('tools', [])[:6])}\n"
-        if bp.get("schedule"):
-            summary += f"   ⏰ Schedule: {bp['schedule']}\n"
+    summary += f"> {crafted_goal}\n\n"
+
+    summary += f"**Model:** `{provider}/{model}`\n"
+    summary += f"**Tools:** {', '.join(tools_needed[:8])}\n"
+    if schedule_label:
+        summary += f"**Schedule:** {schedule_label} (will be set automatically after build)\n"
+    summary += "\n"
+
+    # Auth warnings — Twin always warns about needed integrations
+    if auth_needed:
+        services_str = ", ".join(auth_needed)
+        summary += f"🔗 **Integrations needed:** {services_str}\n"
+        if auth_warning:
+            summary += f"   *{auth_warning}*\n"
         summary += "\n"
 
+    # Assumptions — Twin always shows what it assumed
     if assumptions:
         summary += "**Assumptions:**\n"
-        for a in assumptions[:5]:
+        for a in assumptions[:6]:
             summary += f"- {a}\n"
         summary += "\n"
 
-    # Scope risk warning
-    if risk["level"] != "safe" and risk.get("branches"):
-        summary += f"⚠️ **Scope risk: {risk['level']}** — {risk['reason']}\n\n"
-        options = risk["branches"]
+    # Step 3: Scope risk presentation (Twin-style)
+    if scope_risk == "high":
+        summary += f"⚠️ **Scope risk: HIGH** — {scope_risk_reason or 'Could expand into many operations'}\n"
+        if scope_risk_scale:
+            summary += f"*{scope_risk_scale} — this will be a long run with high credit usage.*\n"
+        summary += "\n"
+        options = [
+            {"label": "Build small sample first", "value": "Agent Architect: build this but limit to 10 items as a test", "description": "Safe starting point", "icon": "🧪", "default": True},
+            {"label": "Build full scope", "value": "Agent Architect: yes, build it", "description": "Full power — may be costly", "icon": "🚀"},
+            {"label": "Adjust scope", "value": "Agent Architect: let me adjust — ", "description": "Change before building", "icon": "✏️"},
+        ]
+    elif scope_risk == "moderate":
+        summary += f"⚠️ **Scope risk: moderate** — {scope_risk_reason or 'Multi-step processing that could scale up'}\n\n"
+        options = [
+            {"label": "Build with limits", "value": "Agent Architect: yes, build it", "description": "Safe default", "icon": "🛡️", "default": True},
+            {"label": "Build unrestricted", "value": "Agent Architect: build with no restrictions", "description": "Full power", "icon": "⚡"},
+            {"label": "Adjust", "value": "Agent Architect: let me adjust — ", "description": "Change before building", "icon": "✏️"},
+        ]
     else:
         options = [
-            {"label": "Build it", "value": "Agent Architect: yes, build it", "description": "Create these agents now", "icon": "🏗️"},
+            {"label": "Build it", "value": "Agent Architect: yes, build it", "description": "Create this agent now", "icon": "🏗️"},
             {"label": "Adjust something", "value": "Agent Architect: let me adjust — ", "description": "Change before building", "icon": "✏️"},
         ]
 
@@ -303,8 +442,8 @@ async def _handle_build_preview(
         "panel_url": PANEL_URL,
         "operation": "plan_preview",
         "intent": "BUILD",
-        "scope_risk": risk["level"],
-        "blueprint": blueprint,
+        "scope_risk": scope_risk,
+        "crafted_goal_meta": crafted,
         "summary": summary,
         "present_options": {
             "_type": "present_options",
@@ -326,8 +465,18 @@ async def _handle_build_execute(
     user_api_keys: dict | None,
     workspace: dict,
     agents: list[dict],
+    crafted_meta: dict | None = None,
 ) -> dict:
-    """Phase 2: Actually create agents, execute first run, return results."""
+    """Phase 2 — Twin Build Execute.
+
+    1. Use crafted goal metadata if available (from Phase 1)
+    2. Generate full blueprint
+    3. Create agents
+    4. Proactively set schedule if recurrence was detected
+    5. Execute first run + verify results
+    6. Store build event in memory
+    7. ALWAYS present follow-up options
+    """
     import httpx as _httpx
 
     platform_ctx = f"Resonant Genesis ({workspace.get('tools_summary', '160+ tools')})"
@@ -339,11 +488,27 @@ async def _handle_build_execute(
         descs = [f"- {a['name']} ({a.get('model', '?')})" for a in agents[:10]]
         agents_str = "\n".join(descs)
 
-    blueprint = await generate_blueprint(message, user_api_keys, platform_ctx, agents_str)
+    # If we have crafted goal metadata from Phase 1, use it to enrich the blueprint prompt
+    build_message = message
+    if crafted_meta and crafted_meta.get("crafted_goal"):
+        build_message = crafted_meta["crafted_goal"]
+
+    blueprint = await generate_blueprint(build_message, user_api_keys, platform_ctx, agents_str)
 
     if not blueprint or "agents" not in blueprint:
         # Ultimate fallback: simple builder
         payload = build_simple_payload(message)
+        # If we have crafted metadata, override the simple payload with it
+        if crafted_meta:
+            payload["name"] = crafted_meta.get("agent_name", payload.get("name", "Agent"))
+            payload["description"] = crafted_meta.get("description", payload.get("description", ""))
+            if crafted_meta.get("tools_needed"):
+                payload["tools"] = crafted_meta["tools_needed"]
+            if crafted_meta.get("model"):
+                payload["model"] = crafted_meta["model"]
+            if crafted_meta.get("provider"):
+                payload["provider"] = crafted_meta["provider"]
+
         async with _httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             result = await create_single_agent(client, payload, headers)
         if result:
@@ -374,22 +539,43 @@ async def _handle_build_execute(
     logger.info(f"🏗️ [BUILD] Creating {len(bp_agents)} agents")
     created, details = await create_agents_from_blueprint(blueprint, user_id, headers)
 
+    # === Twin: Proactive schedule setting ===
+    # If goal crafting detected recurrence, set trigger automatically
+    schedule_set = False
+    schedule_label = ""
+    if crafted_meta and crafted_meta.get("schedule") and created:
+        sched = crafted_meta["schedule"]
+        schedule_label = crafted_meta.get("schedule_label", "recurring")
+        interval = sched.get("interval_seconds", 86400)
+        cron = sched.get("cron_expression")
+        for agent in created:
+            agent_id = agent.get("id")
+            agent_name = agent.get("name", "Agent")
+            if agent_id:
+                goal = crafted_meta.get("crafted_goal", f"Automated {schedule_label} execution")
+                ok = await create_schedule(agent_id, agent_name, interval, cron, goal, headers)
+                if ok:
+                    schedule_set = True
+                    logger.info(f"⏰ [BUILD] Proactively set {schedule_label} schedule for {agent_name}")
+
     # Auto-execute first run
     exec_results = await run_agents_batch(created, bp_agents, headers)
 
-    # Store memory
+    # Store build event in memory (Twin: always persist)
     if created:
         names = [c.get("name", "?") for c in created]
+        mem_content = f"User built {len(created)} agent(s): {', '.join(names)}. Request: {message[:200]}"
+        if schedule_set:
+            mem_content += f" Schedule: {schedule_label}."
         await store_memory(
             user_id,
-            f"User built {len(created)} agent(s): {', '.join(names)}. Request: {message[:200]}",
+            mem_content,
             {"type": "build_event", "agent_count": len(created), "agent_names": names},
         )
 
     # Build summary
     n_created = len(created)
     n_total = len(bp_agents)
-    has_schedule = any(bp.get("schedule") for bp in bp_agents)
 
     summary = f"**{n_created}/{n_total} agents created**\n\n"
     if reasoning:
@@ -399,6 +585,10 @@ async def _handle_build_execute(
 
     if team_name and n_created > 1:
         summary += f"\n\n**Team:** {team_name} ({team_workflow or 'sequential'} workflow)"
+
+    # Proactive schedule notification (Twin-style)
+    if schedule_set:
+        summary += f"\n\n⏰ **Schedule set:** {schedule_label} — this agent will now run automatically."
 
     # Execution results
     if exec_results:
@@ -414,7 +604,7 @@ async def _handle_build_execute(
                 summary += f" — {er['error'][:100]}"
             summary += "\n"
 
-    # Follow-up options
+    # === Twin: Follow-up options (ALWAYS present, context-aware) ===
     any_running = any(er.get("status") in ("running", "started") for er in exec_results)
     any_completed = any(er.get("status") == "completed" for er in exec_results)
     any_failed = any(er.get("status") in ("failed", "launch_failed") for er in exec_results)
@@ -422,12 +612,16 @@ async def _handle_build_execute(
     options = []
     if any_running and created:
         first = created[0]
-        options.append({"label": f"Check status of {first.get('name', 'agent')}", "value": f"Agent Architect: what's the status of {first.get('name', 'agent')}?", "description": "See if run completed", "icon": "🔍"})
-    if any_completed and not has_schedule:
+        options.append({"label": f"Check status", "value": f"Agent Architect: what's the status of {first.get('name', 'agent')}?", "description": "See if run completed", "icon": "🔍"})
+    if any_completed and not schedule_set:
         options.append({"label": "Set up schedule", "value": f"Agent Architect: schedule {created[0].get('name', 'agent')} daily", "description": "Automate recurring runs", "icon": "⏰"})
     if any_failed and created:
         options.append({"label": "Diagnose issues", "value": f"Agent Architect: diagnose {created[0].get('name', 'agent')}", "description": "Investigate what went wrong", "icon": "🔧"})
-    options.append({"label": "Build another", "value": "Agent Architect: build another agent", "description": "Create something new", "icon": "➕"})
+    if any_completed or any_running:
+        options.append({"label": "Build another", "value": "Agent Architect: build another agent", "description": "Create something new", "icon": "➕"})
+    if not options:
+        options.append({"label": "Try again", "value": f"Agent Architect: {message[:80]}", "description": "Retry the build", "icon": "🔄"})
+        options.append({"label": "Build something else", "value": "Agent Architect: build another agent", "description": "Start fresh", "icon": "➕"})
 
     return {
         "success": n_created > 0,
@@ -442,6 +636,8 @@ async def _handle_build_execute(
         ],
         "execution_results": exec_results,
         "blueprint": blueprint,
+        "schedule_set": schedule_set,
+        "schedule_label": schedule_label if schedule_set else None,
         "summary": summary,
         "present_options": {
             "_type": "present_options",
@@ -458,11 +654,17 @@ async def _handle_build_execute(
 
 async def _handle_brainstorm(
     message: str,
+    user_id: str,
     agents: list[dict],
     workspace: dict,
     user_api_keys: dict | None,
 ) -> dict:
-    """Opinionated proposals based on user context."""
+    """Twin-style brainstorm: opinionated, memory-aware, outcome-focused.
+
+    Twin NEVER asks 'what do you want to build?' — it PROPOSES based on context.
+    Paints vivid outcome pictures. Pushes toward outcomes, not tasks.
+    """
+    memory_facts = workspace.get("memory_facts", "")
     agent_summary = "Fresh workspace — no agents yet."
     if agents:
         names = [a.get("name", "?") for a in agents[:10]]
@@ -470,7 +672,7 @@ async def _handle_brainstorm(
 
     proposals = await generate_brainstorm(
         message,
-        workspace.get("memory_facts", ""),
+        memory_facts,
         agent_summary,
         workspace.get("tools_summary", "160+ tools"),
         user_api_keys,
@@ -480,14 +682,17 @@ async def _handle_brainstorm(
         intro = proposals.get("intro", "Here's what I'd build based on your situation.")
         items = proposals["proposals"][:3]
 
+        # Twin-style: concise, opinionated, outcome-focused presentation
         lines = [f"**{intro}**\n"]
-        if workspace.get("memory_facts"):
-            lines.append(f"*Context: {workspace['memory_facts'][:150]}*\n")
+        if memory_facts:
+            lines.append(f"*I know: {memory_facts[:150]}*\n")
         for i, p in enumerate(items):
             lines.append(f"**{i+1}. {p.get('name', 'Agent')}**")
             lines.append(f"   {p.get('description', '')}")
             if p.get("why"):
-                lines.append(f"   *Why:* {p['why']}")
+                lines.append(f"   *Why this matters:* {p['why']}")
+            if p.get("outcome"):
+                lines.append(f"   *Result:* {p['outcome']}")
             lines.append("")
 
         options = []
@@ -501,17 +706,20 @@ async def _handle_brainstorm(
             })
         options.append({"label": "I have my own idea", "value": "Agent Architect: I have a specific idea —", "description": "Describe what you need", "icon": "✏️"})
     else:
+        # Twin-style fallback: opinionated defaults based on available tools
         lines = [
             "**Here's what I'd build for you:**\n",
-            "**1. Research Monitor** — Searches the web daily for specific topics, stores findings, sends digest.",
-            "**2. Workflow Automator** — Connects tools (Drive, Calendar, GitHub) into automated pipelines.",
-            "**3. Community Agent** — Monitors Rabbit communities and auto-responds or posts on schedule.",
+            "**1. Morning Briefing** — Collects top HackerNews stories and trending GitHub AI repos, compiles a digest, and sends it to your email every morning.",
+            "**2. Workflow Automator** — Connects your tools (Drive, Calendar, GitHub, Slack) into automated pipelines that trigger on schedule or events.",
+            "**3. Community Agent** — Monitors Rabbit communities for relevant posts, auto-responds with helpful content, and posts on a schedule.",
+            "",
+            "Each runs autonomously once built — no daily effort from you.",
             "",
         ]
         options = [
-            {"label": "Research Monitor", "value": "Agent Architect: build a Research Monitor that searches the web daily and sends digest emails", "description": "Web monitoring + digests", "icon": "🏗️"},
-            {"label": "Workflow Automator", "value": "Agent Architect: build a Workflow Automator that connects my tools", "description": "Tool pipeline automation", "icon": "🏗️"},
-            {"label": "Community Agent", "value": "Agent Architect: build a Community Agent for Rabbit", "description": "Community auto-posts", "icon": "🏗️"},
+            {"label": "Morning Briefing", "value": "Agent Architect: build a Morning Briefing that collects top HackerNews stories and AI GitHub repos, then emails me a digest daily", "description": "Daily news digest via email", "icon": "🏗️"},
+            {"label": "Workflow Automator", "value": "Agent Architect: build a Workflow Automator that connects my Drive, Calendar, and GitHub", "description": "Tool pipeline automation", "icon": "🏗️"},
+            {"label": "Community Agent", "value": "Agent Architect: build a Community Agent that monitors and posts in Rabbit communities", "description": "Community auto-posts", "icon": "🏗️"},
             {"label": "My own idea", "value": "Agent Architect: I have a specific idea —", "description": "Describe what you need", "icon": "✏️"},
         ]
 
