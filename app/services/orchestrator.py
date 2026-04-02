@@ -90,7 +90,7 @@ async def orchestrate(
     if intent == "BRAINSTORM":
         return await _handle_brainstorm(message, user_id, agents, workspace, user_api_keys)
     if intent == "REVIEW":
-        return _handle_review(agents)
+        return _handle_review(message, agents)
     if intent == "MODIFY":
         return await _handle_modify(message, agents, headers, user_api_keys)
     if intent == "DIAGNOSE":
@@ -117,7 +117,7 @@ async def _classify_intent(message: str, user_api_keys: dict | None = None) -> s
     # Quick regex (order: most specific first)
     if any(kw in msg for kw in ("what agents", "list agents", "show agents", "my agents", "how many agents")):
         return "REVIEW"
-    if any(kw in msg for kw in ("why did", "failed", "what went wrong", "error", "diagnose", "debug")):
+    if any(kw in msg for kw in ("why did", "failed", "what went wrong", "error", "diagnose", "debug", "status", "how is", "check")):
         return "DIAGNOSE"
     if any(kw in msg for kw in ("change my", "update my", "modify my", "add tool", "remove tool", "change schedule")):
         return "MODIFY"
@@ -743,8 +743,51 @@ async def _handle_brainstorm(
 # HANDLER: REVIEW
 # ═══════════════════════════════════════════════════════════════
 
-def _handle_review(agents: list[dict]) -> dict:
-    """Show workspace snapshot."""
+def _handle_review(message: str, agents: list[dict]) -> dict:
+    """Show workspace snapshot or specific agent details."""
+    # Try to find specific agent mentioned in message
+    target = _find_agent(message, agents) if message else None
+    
+    if target:
+        # Show detailed view of specific agent
+        status = "🟢 Active" if target.get("is_active") else "🔴 Inactive"
+        tools = target.get("tools", [])
+        tools_str = ", ".join(tools[:6])
+        if len(tools) > 6:
+            tools_str += f" +{len(tools) - 6} more"
+        
+        summary = (
+            f"**{target['name']}** — {status}\n\n"
+            f"**Model:** {target.get('model', '?')}\n"
+            f"**Tools:** {tools_str}\n"
+            f"**Description:** {target.get('description', 'No description')[:200]}\n"
+            f"**Agent ID:** `{target.get('id', '?')}`\n"
+        )
+        if target.get('agent_public_hash'):
+            summary += f"**Public Hash:** `{target['agent_public_hash']}`\n"
+        
+        return {
+            "success": True,
+            "action": "open_agents_panel",
+            "panel_url": PANEL_URL,
+            "intent": "REVIEW",
+            "operation": "review",
+            "agent": {"id": target.get("id"), "name": target.get("name")},
+            "summary": summary,
+            "present_options": {
+                "_type": "present_options",
+                "title": f"What to do with {target['name']}?",
+                "options": [
+                    {"label": "Run now", "value": f"Agent Architect: run {target['name']} now", "description": "Start execution", "icon": "▶️"},
+                    {"label": "Check status", "value": f"Agent Architect: what's the status of {target['name']}?", "description": "See recent runs", "icon": "🔍"},
+                    {"label": "Modify", "value": f"Agent Architect: modify {target['name']}", "description": "Change config/tools", "icon": "✏️"},
+                    {"label": "Back to all agents", "value": "Agent Architect: show my agents", "description": "Workspace overview", "icon": "📋"},
+                ],
+                "allow_custom": True,
+            },
+        }
+    
+    # Show full workspace overview (original behavior)
     if not agents:
         return {
             "success": True,
