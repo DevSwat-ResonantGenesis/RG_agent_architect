@@ -117,7 +117,13 @@ async def _classify_intent(message: str, user_api_keys: dict | None = None) -> s
         return "RUN"
     if any(kw in msg for kw in ("create", "build", "make me", "set up", "deploy", "i need an agent", "i want an agent")):
         return "BUILD"
-    if re.search(r"\b(schedule|automate|recurring|cron|every\s+(?:day|hour|week|morning|evening))\b", msg):
+    # BRAINSTORM: vague exploration, no concrete outcome
+    if any(kw in msg for kw in ("not sure", "what can", "what kind", "help me", "ideas", "explore", "possibilities", "don't know", "dont know")):
+        return "BRAINSTORM"
+    if re.search(r"\b(automate|automation)\b", msg) and not re.search(r"\b(every|daily|hourly|weekly|schedule|cron)\b", msg):
+        return "BRAINSTORM"
+    # SCHEDULE: only when time-specific patterns present
+    if re.search(r"\b(schedule|recurring|cron|every\s+(?:day|hour|week|morning|evening|\d+\s*min))\b", msg):
         return "SCHEDULE"
 
     # LLM fallback
