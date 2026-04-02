@@ -92,7 +92,7 @@ async def orchestrate(
 
     # BUILD intent: Phase 1 — plan preview
     return await _handle_build_preview(
-        message, user_id, user_api_keys, workspace, agents,
+        message, user_id, headers, user_api_keys, workspace, agents,
     )
 
 
@@ -222,6 +222,7 @@ def _assess_scope_risk(message: str) -> dict:
 async def _handle_build_preview(
     message: str,
     user_id: str,
+    headers: dict[str, str],
     user_api_keys: dict | None,
     workspace: dict,
     agents: list[dict],
@@ -241,7 +242,7 @@ async def _handle_build_preview(
 
     if not blueprint or "agents" not in blueprint:
         # LLM planning failed — skip to direct build
-        return await _handle_build_execute(message, user_id, {}, user_api_keys, workspace, agents)
+        return await _handle_build_execute(message, user_id, headers, user_api_keys, workspace, agents)
 
     # Build plan preview summary
     bp_agents = blueprint.get("agents", [])
