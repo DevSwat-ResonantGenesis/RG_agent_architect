@@ -157,6 +157,24 @@ _CONFIRM_PATTERNS = [
 
 def _is_confirmation(message: str, context: dict) -> bool:
     """Detect if user is confirming a previous plan preview."""
+    msg = re.sub(r"^agent\s*architect\s*:\s*", "", message.lower().strip())
+
+    # Strong confirmation: exact button-click values we generate — always trust these
+    _STRONG_CONFIRMS = {"yes, build it", "yes build it", "go ahead", "build it", "ship it", "do it", "yes", "confirm"}
+    if msg in _STRONG_CONFIRMS:
+        # Check ANY evidence of prior plan in context
+        prev = context.get("messages") or context.get("previousMessages") or context.get("previous_messages") or []
+        prev_content = context.get("prev_assistant_content") or ""
+        has_preview = any(
+            any(k in (m.get("content") or "") for k in ("Plan Preview", "Here's what I'll create", "Ready to build", "Mode: BUILD", "agent(s)"))
+            for m in prev[-10:]
+            if m.get("role") == "assistant"
+        ) or any(k in prev_content for k in ("Plan Preview", "Ready to build", "agent(s)"))
+        # Even without history, trust the button click if it has the exact value
+        if has_preview or msg == "yes, build it":
+            return True
+
+    # Standard confirmation: requires history evidence
     prev = context.get("messages") or context.get("previousMessages") or context.get("previous_messages") or []
     has_preview = any(
         any(k in (m.get("content") or "") for k in ("Plan Preview", "Here's what I'll create", "Ready to build", "Mode: BUILD"))
@@ -165,7 +183,6 @@ def _is_confirmation(message: str, context: dict) -> bool:
     )
     if not has_preview:
         return False
-    msg = re.sub(r"^agent\s*architect\s*:\s*", "", message.lower().strip())
     return any(re.search(p, msg) for p in _CONFIRM_PATTERNS)
 
 
