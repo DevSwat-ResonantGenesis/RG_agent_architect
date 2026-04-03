@@ -116,6 +116,75 @@ async def llm_json(
         return None
 
 
+async def llm_call_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    *,
+    model: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 2000,
+    user_api_keys: dict | None = None,
+    timeout: float = 30.0,
+) -> dict | None:
+    """Call LLM with function-calling tools. Returns full message dict with tool_calls if any.
+
+    Returns: {"role": "assistant", "content": "...", "tool_calls": [...]} or None on failure.
+    """
+    model = model or settings.DEFAULT_MODEL
+    body: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+
+    groq_keys = []
+    if user_api_keys and user_api_keys.get("groq"):
+        groq_keys.append(user_api_keys["groq"])
+    groq_keys.extend(k for k in settings.groq_keys() if k not in groq_keys)
+
+    # Try Groq
+    for key in groq_keys:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
+                resp = await c.post(
+                    GROQ_URL,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+                if resp.status_code in (401, 429):
+                    continue
+                if resp.status_code == 200:
+                    msg = resp.json()["choices"][0]["message"]
+                    logger.info(f"[LLM] Tool call response: content={bool(msg.get('content'))}, tool_calls={len(msg.get('tool_calls', []))}")
+                    return msg
+        except Exception as e:
+            logger.warning(f"[LLM] Groq tool call failed: {e}")
+            continue
+
+    # Fallback: OpenAI
+    openai_key = settings.OPENAI_API_KEY
+    if user_api_keys and user_api_keys.get("openai"):
+        openai_key = user_api_keys["openai"]
+    if openai_key:
+        try:
+            oai_body = {**body, "model": settings.REASONING_MODEL}
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
+                resp = await c.post(
+                    OPENAI_URL,
+                    headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                    json=oai_body,
+                )
+                if resp.status_code == 200:
+                    return resp.json()["choices"][0]["message"]
+        except Exception as e:
+            logger.warning(f"[LLM] OpenAI tool call fallback failed: {e}")
+
+    return None
+
+
 async def llm_fast(
     prompt: str,
     *,
