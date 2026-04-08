@@ -1,14 +1,15 @@
 """
 RG Agent Architect — API Routers
-Clean REST endpoints that delegate to the orchestrator.
+REST + SSE streaming endpoints that delegate to the orchestrator.
 """
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from .services.orchestrator import orchestrate
+from .services.orchestrator import orchestrate, orchestrate_stream
 from .services.health_monitor import run_health_check, check_agent_after_run
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,40 @@ async def orchestrate_endpoint(req: OrchestrateRequest, request: Request):
         user_api_keys=req.user_api_keys,
     )
     return result
+
+
+@router.post("/orchestrate/stream")
+async def orchestrate_stream_endpoint(req: OrchestrateRequest, request: Request):
+    """SSE streaming version of orchestrate. Streams real-time events:
+    - status: context gathering progress
+    - thinking: ReAct iteration number
+    - tool_call: which tool is being called
+    - tool_result: tool execution result
+    - done: final structured response (same format as /orchestrate)
+    """
+    headers = _extract_headers(request)
+    if not headers.get("x-user-id"):
+        headers["x-user-id"] = req.user_id
+
+    async def event_generator():
+        async for event in orchestrate_stream(
+            message=req.message,
+            user_id=req.user_id,
+            context=req.context,
+            headers=headers,
+            user_api_keys=req.user_api_keys,
+        ):
+            yield event
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/classify-intent")

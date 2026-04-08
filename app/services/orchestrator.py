@@ -145,6 +145,120 @@ async def orchestrate(
 
 
 # ═══════════════════════════════════════════════════════════════
+# SSE STREAMING ORCHESTRATE — yields events as they happen
+# ═══════════════════════════════════════════════════════════════
+
+async def orchestrate_stream(
+    message: str,
+    user_id: str,
+    context: dict,
+    headers: dict[str, str],
+    user_api_keys: dict | None = None,
+):
+    """SSE streaming version of orchestrate. Yields JSON events:
+      - {"event": "status", "data": "thinking"}
+      - {"event": "tool_call", "data": {"tool": "list_agents", "args": {...}}}
+      - {"event": "tool_result", "data": {"tool": "list_agents", "result": "..."}}
+      - {"event": "thinking", "data": "iteration 2/20"}
+      - {"event": "done", "data": {... final response ...}}
+    """
+    logger.info(f"🏗️ [STREAM] Message: {message[:120]!r}")
+
+    yield _sse_event("status", "Gathering workspace context...")
+
+    workspace = await fetch_workspace_context(user_id, headers)
+    agents = workspace.get("agents", [])
+
+    yield _sse_event("status", f"Found {len(agents)} agent(s). Thinking...")
+
+    system_prompt = build_system_prompt()
+    context_block = _build_context_block(workspace, agents)
+    full_system = f"{system_prompt}\n\n{context_block}"
+
+    messages = [{"role": "system", "content": full_system}]
+    prev_msgs = context.get("messages") or context.get("previousMessages") or context.get("previous_messages") or []
+    for m in prev_msgs[-HISTORY_DEPTH:]:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content[:MSG_TRUNCATE]})
+    messages.append({"role": "user", "content": message})
+
+    for iteration in range(MAX_TOOL_ITERATIONS):
+        yield _sse_event("thinking", f"Step {iteration + 1}/{MAX_TOOL_ITERATIONS}")
+
+        response = await llm_call_with_tools(
+            messages, AGENT_TOOLS,
+            user_api_keys=user_api_keys,
+            temperature=0.2,
+            max_tokens=MAX_TOKENS,
+        )
+
+        if not response:
+            yield _sse_event("done", _fallback_response(message, agents))
+            return
+
+        tool_calls = response.get("tool_calls", [])
+        content = response.get("content") or ""
+
+        if not tool_calls:
+            yield _sse_event("done", _format_text_response(content, agents))
+            return
+
+        messages.append(response)
+
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            tool_name = fn.get("name", "")
+            try:
+                arguments = json.loads(fn.get("arguments", "{}"))
+            except json.JSONDecodeError:
+                arguments = {}
+
+            yield _sse_event("tool_call", {"tool": tool_name, "args": _safe_args(arguments)})
+
+            if tool_name == "respond_to_user":
+                yield _sse_event("done", _format_respond_to_user(arguments, agents))
+                return
+
+            if tool_name == "present_options":
+                yield _sse_event("done", _format_present_options(arguments, agents))
+                return
+
+            result = await execute_tool(tool_name, arguments, headers, agents)
+
+            yield _sse_event("tool_result", {"tool": tool_name, "result": result[:500]})
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "content": result,
+            })
+
+    yield _sse_event("done", _format_text_response(
+        "I've been working on your request but hit the iteration limit. Here's what I found so far.",
+        agents,
+    ))
+
+
+def _sse_event(event: str, data) -> str:
+    """Format a single SSE event line."""
+    payload = json.dumps({"event": event, "data": data}, default=str)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _safe_args(args: dict) -> dict:
+    """Truncate large argument values for SSE display."""
+    safe = {}
+    for k, v in args.items():
+        if isinstance(v, str) and len(v) > 200:
+            safe[k] = v[:200] + "..."
+        else:
+            safe[k] = v
+    return safe
+
+
+# ═══════════════════════════════════════════════════════════════
 # ReAct HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════
 

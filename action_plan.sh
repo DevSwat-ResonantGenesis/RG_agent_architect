@@ -183,13 +183,78 @@ git commit -m "FULL ARCHITECTURE REWRITE: Match Twin's orchestrator quality
 git push origin main
 
 # Step 2: Deploy on server
+# Docker service name: agent_architect (NOT agent_architect_service)
+# Compose file: /home/deploy/genesis2026_production_backend/docker-compose.unified.yml
 ssh deploy@134.199.221.149 << 'EOF'
 cd /home/deploy/RG_agent_architect
-git fetch origin
+git fetch origin main
 git reset --hard origin/main
-sudo docker compose -f /home/deploy/docker-compose.unified.yml up -d --build agent_architect_service
+echo "✅ Code pulled"
+
+cd /home/deploy/genesis2026_production_backend
+sudo docker compose -f docker-compose.unified.yml up -d --build agent_architect
 sleep 5
-curl -s http://localhost:8000/architect/health | python3 -m json.tool
+
+# Verify container is running
+sudo docker ps --filter name=agent_architect --format '{{.Names}} {{.Status}}'
+echo "✅ Deploy complete"
 EOF
 
 echo "=== Deploy complete ==="
+
+# ═══════════════════════════════════════════════════════════════
+# VERIFICATION CHECKLIST (run after deploy)
+# ═══════════════════════════════════════════════════════════════
+#
+# 1. Container health:
+#    ssh deploy@134.199.221.149 "sudo docker ps --filter name=agent_architect"
+#
+# 2. Logs (check for startup errors):
+#    ssh deploy@134.199.221.149 "sudo docker logs agent_architect --tail 20"
+#
+# 3. Health endpoint:
+#    ssh deploy@134.199.221.149 "curl -s http://agent_architect:8000/health"
+#
+# 4. Test orchestrate endpoint (requires auth headers):
+#    curl -X POST https://dev-swat.com/architect/orchestrate \
+#      -H "Content-Type: application/json" \
+#      -H "Authorization: Bearer <token>" \
+#      -d '{"message":"show my agents","user_id":"test","context":{}}'
+#
+# ═══════════════════════════════════════════════════════════════
+# TODO CHECKPOINTS (based on twin.md reference spec)
+# ═══════════════════════════════════════════════════════════════
+#
+# PHASE 1: Foundation ✅
+#   [x] config.py — polling 40 rounds @5s, timeout 180s, orchestrator constants
+#   [x] context.py — full tool list with names+descriptions grouped by category
+#
+# PHASE 2: Intelligence ✅
+#   [x] prompts.py — removed contradictions, Twin-aligned PLATFORM_PROMPT
+#   [x] tools.py — 25 tools (was 17): +workspace_snapshot, agent_snapshot,
+#       run_snapshot, get_user_memory, update_user_memory, present_options,
+#       get_credits_info, get_current_time
+#   [x] tool_executor.py — implementations for all 8 new tools
+#
+# PHASE 3: Orchestration ✅
+#   [x] orchestrator.py — 20 iterations, 4096 tokens, 10 msg history
+#   [x] orchestrator.py — present_options as semi-terminal action
+#   [x] builder.py — max_loops 25→30
+#   [x] routers.py — fixed dead _classify_intent import
+#
+# PHASE 4: Deploy ✅
+#   [x] Committed: e8b06ad
+#   [x] Pushed to origin/main
+#   [x] Pulled on server
+#   [x] Rebuilt container: agent_architect
+#
+# PHASE 5: Remaining (future sessions)
+#   [ ] Verify create→run→report autonomous flow end-to-end
+#   [ ] Test scope risk HIGH/MODERATE/SAFE detection
+#   [ ] Verify memory persistence (get/update_user_memory)
+#   [ ] Verify present_options renders in frontend (PickOne/PickMultiple/Secret)
+#   [ ] Add run event handling (SUCCESS/PARTIAL/FAIL → follow-up options)
+#   [ ] Multi-agent team orchestration
+#   [ ] Research-before-build: verify check_tool_exists called before tool assignment
+#   [ ] Dead code cleanup in builder.py
+#   [ ] Integration tests: user msg → agent created → agent runs → results
