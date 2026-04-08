@@ -115,6 +115,40 @@ class MemoryStore:
             logger.warning(f"[Memory] get anchors failed: {e}")
         return {}
 
+    # ── Architect Self-Learning (learns from every conversation) ──
+
+    async def store_architect_insight(self, insight: str, category: str = "observation") -> Dict:
+        """Store an insight the architect learned during conversation.
+
+        Categories: observation, user_preference, agent_pattern, failure_pattern, success_pattern
+        This makes the architect smarter over time — it remembers what works.
+        """
+        return await self._post("/rag/memories", {
+            "content": f"[architect:{category}] {insight}",
+            "user_id": self.workspace_id,
+            "scope": "user",
+            "type": "architect_insight",
+            "metadata": {"category": category, "source": "architect"},
+        })
+
+    async def retrieve_architect_context(self) -> Dict[str, Any]:
+        """Pull all relevant context for the architect at session start.
+
+        Combines: user preferences, past architect insights, agent patterns.
+        This is what makes the architect a real agent — it remembers and learns.
+        """
+        user_mem = await self.get_user_memory()
+        insights = await self._post("/memory/hash-sphere/search", {
+            "query": "architect insights patterns preferences",
+            "user_id": self.workspace_id,
+            "scope": "user",
+            "limit": 15,
+        })
+        return {
+            "user_memory": user_mem,
+            "architect_insights": insights,
+        }
+
     # ── Internal HTTP helper ──
 
     async def _post(self, path: str, body: Dict) -> Dict:

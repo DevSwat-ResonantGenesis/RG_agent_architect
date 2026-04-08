@@ -88,4 +88,8 @@ ORCHESTRATOR_TOOLS = [
        {"agent_id": {"type": "string"}}, ["agent_id"]),
     _t("ask_memory", "Ask a question to RAG memory — agent learns from past context",
        {"question": {"type": "string"}, "agent_id": {"type": "string"}}, ["question"]),
+    _t("store_insight", "Store something you learned during this conversation for future reference. Categories: observation, user_preference, agent_pattern, failure_pattern, success_pattern",
+       {"insight": {"type": "string", "description": "What you learned"}, "category": {"type": "string", "enum": ["observation", "user_preference", "agent_pattern", "failure_pattern", "success_pattern"]}},
+       ["insight", "category"]),
+    _t("retrieve_architect_context", "Get your accumulated knowledge: past insights, user preferences, patterns you've noticed. Call this at the start of every session to remember what you know."),
 ]

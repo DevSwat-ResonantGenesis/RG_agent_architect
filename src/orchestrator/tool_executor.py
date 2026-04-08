@@ -95,6 +95,13 @@ class ToolExecutor:
     async def _tool_get_agent_chain_status(self, a):
         return await chain_client.get_agent_chain_status(a.get("agent_id", ""))
 
+    # ── Architect Self-Learning ──
+    async def _tool_store_insight(self, a):
+        return await self.memory.store_architect_insight(
+            a.get("insight", ""), a.get("category", "observation"))
+    async def _tool_retrieve_architect_context(self, a):
+        return await self.memory.retrieve_architect_context()
+
     # ── Other ──
     async def _tool_open_interface_editor(self, a): return {"status": "editor_opened", "agent_id": a["agent_id"]}
     async def _tool_present_options(self, a):

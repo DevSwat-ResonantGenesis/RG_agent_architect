@@ -2,7 +2,7 @@
 import os
 
 # ── Infrastructure URLs ──
-DATABASE_URL = os.getenv("ARCHITECT_DATABASE_URL", os.getenv("DATABASE_URL", ""))
+AGENT_ENGINE_URL = os.getenv("AGENT_ENGINE_URL", "http://agent_engine_service:8000")
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://llm_service:8000")
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory_service:8000")
 

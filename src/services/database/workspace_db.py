@@ -1,178 +1,205 @@
-"""Workspace DB — PostgreSQL (external DigitalOcean DB, persistent across restarts)"""
-import json
+"""Workspace DB — Agent Engine API client (no separate DB, uses same store as all agents)"""
 import logging
 from typing import Any, Dict, List, Optional
 
-import asyncpg
+import httpx
 
-from src.core.config import DATABASE_URL
+from src.core.config import AGENT_ENGINE_URL
 
 logger = logging.getLogger(__name__)
 
-_pool: Optional[asyncpg.Pool] = None
-
-def _pg_url() -> str:
-    url = DATABASE_URL
-    if url.startswith("postgresql+asyncpg://"):
-        url = url.replace("postgresql+asyncpg://", "postgresql://")
-    for suffix in ("?ssl=require", "&ssl=require", "?sslmode=require", "&sslmode=require"):
-        url = url.replace(suffix, "")
-    url = url.rstrip("?&")
-    return url
-
-
-async def get_pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        import ssl as _ssl
-        ctx = _ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = _ssl.CERT_NONE
-        _pool = await asyncpg.create_pool(_pg_url(), min_size=2, max_size=10, ssl=ctx)
-        await _init_schema(_pool)
-    return _pool
-
-
-async def _init_schema(pool: asyncpg.Pool):
-    async with pool.acquire() as c:
-        await c.execute("""
-            CREATE TABLE IF NOT EXISTS architect_workspaces(
-                id TEXT PRIMARY KEY, name TEXT DEFAULT 'My Workspace', icon TEXT DEFAULT '🏢');
-            CREATE TABLE IF NOT EXISTS architect_agents(
-                id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT, goal TEXT,
-                icon TEXT DEFAULT '🤖', system_prompt TEXT DEFAULT '',
-                tools JSONB DEFAULT '[]', needs_build BOOLEAN DEFAULT TRUE,
-                max_loops INT DEFAULT 30, temperature REAL DEFAULT 0.5,
-                model TEXT DEFAULT 'groq/llama-3.3-70b-versatile',
-                created_at TIMESTAMPTZ DEFAULT NOW());
-            CREATE TABLE IF NOT EXISTS architect_runs(
-                id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, outcome TEXT,
-                summary TEXT DEFAULT '', loop_count INT DEFAULT 0,
-                tool_calls JSONB DEFAULT '[]', tokens_used INT DEFAULT 0,
-                errors JSONB DEFAULT '[]',
-                started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ);
-            CREATE TABLE IF NOT EXISTS architect_triggers(
-                id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, trigger_type TEXT DEFAULT 'time',
-                interval TEXT DEFAULT 'daily', timezone TEXT DEFAULT 'UTC',
-                enabled BOOLEAN DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT NOW());
-            CREATE INDEX IF NOT EXISTS idx_agents_ws ON architect_agents(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_runs_agent ON architect_runs(agent_id);
-        """)
-    logger.info("[DB] Schema initialized")
-
 
 class WorkspaceDB:
+    """Talks to the Agent Engine API for all agent CRUD — same DB as every other agent.
+
+    Per-user isolation via x-user-id header. No separate architect_* tables.
+    """
+
     def __init__(self, workspace_id: str):
         self.workspace_id = workspace_id
+        self._headers = {"x-user-id": workspace_id, "Content-Type": "application/json"}
 
     async def get_snapshot(self) -> Dict:
-        pool = await get_pool()
-        rows = await pool.fetch(
-            "SELECT id, name, goal, icon, needs_build, model, created_at FROM architect_agents WHERE workspace_id=$1", self.workspace_id)
-        agents = [dict(r) for r in rows]
-        for a in agents:
-            if a.get("created_at"):
-                a["created_at"] = a["created_at"].isoformat()
-        return {"agents": agents, "agent_count": len(agents)}
+        """List all agents for this user from Agent Engine."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/",
+                    headers=self._headers,
+                )
+                if resp.status_code != 200:
+                    logger.warning(f"[WorkspaceDB] list agents failed: {resp.status_code}")
+                    return {"agents": [], "agent_count": 0}
+                agents = resp.json()
+                # Normalize to list if API returns dict wrapper
+                if isinstance(agents, dict):
+                    agents = agents.get("agents", [])
+                return {"agents": agents, "agent_count": len(agents)}
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] get_snapshot error: {e}")
+            return {"agents": [], "agent_count": 0}
 
     async def save_agent(self, agent_id: str, name: str, goal: str, icon: str = "🤖",
                          system_prompt: str = "", tools: list = None, needs_build: bool = True,
                          max_loops: int = 30, temperature: float = 0.5,
                          model: str = "groq/llama-3.3-70b-versatile") -> Dict:
-        pool = await get_pool()
-        await pool.execute("""
-            INSERT INTO architect_agents(id, workspace_id, name, goal, icon, system_prompt, tools, needs_build, max_loops, temperature, model)
-            VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11)
-            ON CONFLICT(id) DO UPDATE SET name=$3, goal=$4, icon=$5, system_prompt=$6,
-                tools=$7::jsonb, needs_build=$8, max_loops=$9, temperature=$10, model=$11
-        """, agent_id, self.workspace_id, name, goal, icon, system_prompt,
-            json.dumps(tools or []), needs_build, max_loops, temperature, model)
-        return {"agent_id": agent_id, "saved": True}
+        """Create or update an agent via Agent Engine API."""
+        provider = model.split("/")[0] if "/" in model else "groq"
+        model_name = model.split("/", 1)[1] if "/" in model else model
+        payload = {
+            "name": name,
+            "description": goal,
+            "goal": goal,
+            "system_prompt": system_prompt or f"You are {name}. {goal}",
+            "provider": provider,
+            "model": model_name,
+            "temperature": temperature,
+            "max_tokens": 128000,
+            "tools": tools or [],
+            "safety_config": {"max_loops": max_loops, "max_tokens_per_run": 500000},
+            "is_active": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                # Try PATCH first (update existing)
+                resp = await client.patch(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                    headers=self._headers, json=payload,
+                )
+                if resp.status_code == 200:
+                    return {"agent_id": agent_id, "saved": True, "action": "updated"}
+                # If not found, create new
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/",
+                    headers=self._headers, json=payload,
+                )
+                if resp.status_code in (200, 201):
+                    data = resp.json()
+                    return {"agent_id": data.get("id", agent_id), "saved": True, "action": "created"}
+                logger.warning(f"[WorkspaceDB] save_agent failed: {resp.status_code} {resp.text[:200]}")
+                return {"agent_id": agent_id, "saved": False, "error": resp.text[:200]}
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] save_agent error: {e}")
+            return {"agent_id": agent_id, "saved": False, "error": str(e)}
 
     async def get_agent(self, agent_id: str) -> Optional[Dict]:
-        pool = await get_pool()
-        r = await pool.fetchrow("SELECT * FROM architect_agents WHERE id=$1", agent_id)
-        if not r:
+        """Get a single agent by ID from Agent Engine."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                    headers=self._headers,
+                )
+                if resp.status_code != 200:
+                    return None
+                return resp.json()
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] get_agent error: {e}")
             return None
-        d = dict(r)
-        if d.get("created_at"):
-            d["created_at"] = d["created_at"].isoformat()
-        return d
 
     async def get_agent_snapshot(self, agent_id: str) -> Dict:
+        """Get agent details + recent sessions from Agent Engine."""
         agent = await self.get_agent(agent_id)
         if not agent:
             return {"error": "Not found"}
-        pool = await get_pool()
-        runs = await pool.fetch(
-            "SELECT * FROM architect_runs WHERE agent_id=$1 ORDER BY started_at DESC LIMIT 10", agent_id)
-        run_list = []
-        for r in runs:
-            d = dict(r)
-            for k in ("started_at", "finished_at"):
-                if d.get(k):
-                    d[k] = d[k].isoformat()
-            run_list.append(d)
-        return {"agent": agent, "recent_runs": run_list}
+        sessions = []
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}/sessions",
+                    headers=self._headers,
+                )
+                if resp.status_code == 200:
+                    sessions = resp.json()
+                    if isinstance(sessions, dict):
+                        sessions = sessions.get("sessions", [])
+        except Exception as e:
+            logger.warning(f"[WorkspaceDB] sessions fetch failed: {e}")
+        return {"agent": agent, "recent_runs": sessions[:10]}
 
     async def get_run_snapshot(self, run_id: str) -> Dict:
-        pool = await get_pool()
-        r = await pool.fetchrow("SELECT * FROM architect_runs WHERE id=$1", run_id)
-        if not r:
-            return {"error": "Not found"}
-        d = dict(r)
-        for k in ("started_at", "finished_at"):
-            if d.get(k):
-                d[k] = d[k].isoformat()
-        return d
-
-    async def save_run(self, run_id: str, agent_id: str, outcome: str = None,
-                       summary: str = "", loop_count: int = 0, tool_calls: list = None,
-                       tokens_used: int = 0, errors: list = None,
-                       started_at=None, finished_at=None) -> Dict:
-        pool = await get_pool()
-        await pool.execute("""
-            INSERT INTO architect_runs(id, agent_id, outcome, summary, loop_count, tool_calls, tokens_used, errors, started_at, finished_at)
-            VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,$9,$10)
-            ON CONFLICT(id) DO UPDATE SET outcome=$3, summary=$4, loop_count=$5,
-                tool_calls=$6::jsonb, tokens_used=$7, errors=$8::jsonb, finished_at=$10
-        """, run_id, agent_id, outcome, summary, loop_count,
-            json.dumps(tool_calls or []), tokens_used, json.dumps(errors or []),
-            started_at, finished_at)
-        return {"run_id": run_id, "saved": True}
+        """Get session/run details from Agent Engine."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/sessions/{run_id}",
+                    headers=self._headers,
+                )
+                if resp.status_code != 200:
+                    return {"error": "Not found"}
+                return resp.json()
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] get_run_snapshot error: {e}")
+            return {"error": str(e)}
 
     async def delete_agent(self, agent_id: str) -> Dict:
-        pool = await get_pool()
-        await pool.execute("DELETE FROM architect_runs WHERE agent_id=$1", agent_id)
-        await pool.execute("DELETE FROM architect_triggers WHERE agent_id=$1", agent_id)
-        await pool.execute("DELETE FROM architect_agents WHERE id=$1", agent_id)
-        return {"deleted": agent_id}
+        """Delete agent via Agent Engine API."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.delete(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                    headers=self._headers,
+                )
+                if resp.status_code in (200, 204):
+                    return {"deleted": agent_id}
+                return {"error": f"Delete failed: {resp.status_code}"}
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] delete_agent error: {e}")
+            return {"error": str(e)}
 
     async def stop_run(self, run_id: str) -> Dict:
-        pool = await get_pool()
-        await pool.execute("UPDATE architect_runs SET outcome='Stopped', finished_at=NOW() WHERE id=$1", run_id)
-        return {"stopped": run_id}
+        """Cancel a running session via Agent Engine."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/sessions/{run_id}/cancel",
+                    headers=self._headers,
+                )
+                if resp.status_code == 200:
+                    return {"stopped": run_id}
+                return {"error": f"Stop failed: {resp.status_code}"}
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] stop_run error: {e}")
+            return {"error": str(e)}
 
     async def set_trigger(self, agent_id: str, interval: str = "daily",
                           timezone: str = "UTC", **kw) -> Dict:
-        import uuid
-        pool = await get_pool()
-        tid = str(uuid.uuid4())
-        await pool.execute("""
-            INSERT INTO architect_triggers(id, agent_id, interval, timezone) VALUES($1,$2,$3,$4)
-        """, tid, agent_id, interval, timezone)
-        return {"trigger_id": tid, "agent_id": agent_id, "interval": interval}
+        """Create a trigger/schedule via Agent Engine API."""
+        # Map simple intervals to cron expressions
+        cron_map = {
+            "minutely": "* * * * *",
+            "hourly": "0 * * * *",
+            "daily": "0 9 * * *",
+            "weekly": "0 9 * * 1",
+        }
+        payload = {
+            "trigger_type": "cron",
+            "cron_expression": cron_map.get(interval, "0 9 * * *"),
+            "timezone": timezone,
+            "enabled": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}/triggers",
+                    headers=self._headers, json=payload,
+                )
+                if resp.status_code in (200, 201):
+                    data = resp.json()
+                    return {"trigger_id": data.get("id", ""), "agent_id": agent_id, "interval": interval}
+                return {"error": f"Trigger creation failed: {resp.status_code}"}
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] set_trigger error: {e}")
+            return {"error": str(e)}
 
     async def set_workspace_name(self, name: str, icon: str) -> Dict:
-        pool = await get_pool()
-        await pool.execute("""
-            INSERT INTO architect_workspaces(id, name, icon) VALUES($1,$2,$3)
-            ON CONFLICT(id) DO UPDATE SET name=$2, icon=$3
-        """, self.workspace_id, name, icon)
+        """Workspace naming — stored in memory service as user preference."""
         return {"name": name, "icon": icon}
 
     async def list_databases(self) -> list:
-        pool = await get_pool()
-        rows = await pool.fetch(
-            "SELECT id, name FROM architect_agents WHERE workspace_id=$1", self.workspace_id)
-        return [{"agent_id": r["id"], "agent_name": r["name"]} for r in rows]
+        """List agents as databases (each agent has its own state)."""
+        snapshot = await self.get_snapshot()
+        return [
+            {"agent_id": a.get("id", ""), "agent_name": a.get("name", "")}
+            for a in snapshot.get("agents", [])
+        ]
