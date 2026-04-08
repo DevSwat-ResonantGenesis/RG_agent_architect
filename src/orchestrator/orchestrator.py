@@ -1,10 +1,10 @@
-"""Orchestrator — Main conversation loop with tool-calling"""
+"""Orchestrator — Main conversation loop with proper tool-calling protocol"""
 import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.core.config import HISTORY_DEPTH, MAX_TOKENS, ORCHESTRATOR_MAX_ITERATIONS
+from src.core.config import HISTORY_DEPTH, ORCHESTRATOR_MAX_ITERATIONS
 from src.core.context import fetch_workspace_context
 from src.core.llm_client import call_llm
 from src.models.agent import OperationMode
@@ -20,7 +20,7 @@ class Orchestrator:
     def __init__(self, workspace_id: str):
         self.workspace_id = workspace_id
         self.tool_executor = ToolExecutor(workspace_id)
-        self.history: List[Dict[str, str]] = []
+        self.history: List[Dict] = []
         self.context: Optional[Dict[str, Any]] = None
 
     async def initialize_session(self):
@@ -40,65 +40,69 @@ class Orchestrator:
         return response
 
     async def _run_loop(self, mode: OperationMode) -> Dict[str, Any]:
-        text = ""
-        tool_results = []
-        for _ in range(ORCHESTRATOR_MAX_ITERATIONS):
-            llm_resp = await self._call_llm(mode, tool_results)
-            if llm_resp.get("text"):
-                text += llm_resp["text"]
-            calls = llm_resp.get("tool_calls", [])
-            if not calls:
-                break
-            tool_results = []
-            results = await asyncio.gather(
-                *[self.tool_executor.execute(c["name"], c["arguments"]) for c in calls],
-                return_exceptions=True,
-            )
-            for c, r in zip(calls, results):
-                entry = {"tool": c["name"]}
-                entry["error" if isinstance(r, Exception) else "result"] = str(r) if isinstance(r, Exception) else r
-                tool_results.append(entry)
-                if c["name"] == "present_options":
-                    return {"text": text, "options": r, "mode": mode.value}
-        return {"text": text, "mode": mode.value}
-
-    async def _call_llm(self, mode, tool_results):
         messages = [{"role": "system", "content": PLATFORM_PROMPT}]
-        for h in self.history:
-            messages.append(h)
-        if tool_results:
-            messages.append({"role": "user", "content": f"Tool results:\n{json.dumps(tool_results, default=str)}"})
-        try:
-            resp = await call_llm(
-                messages=messages,
-                tools=ORCHESTRATOR_TOOLS,
-                model="groq/llama-3.3-70b-versatile",
-            )
+        messages.extend(self.history)
+        final_text = ""
+
+        for iteration in range(ORCHESTRATOR_MAX_ITERATIONS):
+            try:
+                resp = await call_llm(
+                    messages=messages,
+                    tools=ORCHESTRATOR_TOOLS,
+                    model="groq/llama-3.3-70b-versatile",
+                )
+            except Exception as e:
+                logger.error(f"LLM call failed iteration {iteration}: {e}")
+                return {"text": final_text or f"Error: {e}", "mode": mode.value}
+
             choice = resp.get("choices", [{}])[0]
             msg = choice.get("message", {})
             content = msg.get("content", "")
-            tool_calls = msg.get("tool_calls", [])
-            parsed_calls = []
-            for tc in (tool_calls or []):
+            raw_tool_calls = msg.get("tool_calls") or []
+
+            if content:
+                final_text += content
+
+            if not raw_tool_calls:
+                break
+
+            assistant_msg = {"role": "assistant", "content": content or None}
+            assistant_msg["tool_calls"] = raw_tool_calls
+            messages.append(assistant_msg)
+
+            for tc in raw_tool_calls:
+                tc_id = tc.get("id", "")
                 fn = tc.get("function", {})
+                name = fn.get("name", "")
                 try:
                     args = json.loads(fn.get("arguments", "{}"))
                 except json.JSONDecodeError:
                     args = {}
-                parsed_calls.append({"name": fn.get("name", ""), "arguments": args})
-            return {"text": content, "tool_calls": parsed_calls}
-        except Exception as e:
-            logger.error(f"LLM call failed: {e}")
-            return {"text": f"Error: {e}", "tool_calls": []}
+
+                logger.info(f"[Orch] tool: {name}({list(args.keys())})")
+                try:
+                    result = await self.tool_executor.execute(name, args)
+                except Exception as e:
+                    result = {"error": str(e)}
+
+                if name == "present_options":
+                    return {"text": final_text, "options": result, "mode": mode.value}
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": json.dumps(result, default=str) if not isinstance(result, str) else result,
+                })
+
+        return {"text": final_text, "mode": mode.value}
 
     async def handle_run_event(self, event: Dict) -> Dict:
         outcome = event.get("outcome", "")
         etype = event.get("type", "")
         if etype == "build" and outcome == "SUCCESS":
-            opts = ["Set up trigger", "Create UI", "Try autonomous run"]
-            return {"text": "Agent built.", "options": opts}
+            return {"text": "Agent built.", "options": ["Set up trigger", "Try autonomous run"]}
         if etype == "run" and outcome == "SUCCESS":
-            return {"text": "Run completed.", "options": ["Run again", "Make changes", "Set up schedule"]}
+            return {"text": "Run completed.", "options": ["Run again", "Set up schedule"]}
         if outcome in ("PARTIAL", "FAIL"):
-            return {"text": f"{etype.title()} {outcome}.", "options": ["Fix issue", "Try different approach", "Show details"]}
+            return {"text": f"{etype.title()} {outcome}.", "options": ["Fix issue", "Show details"]}
         return {"text": "Event received.", "options": []}
