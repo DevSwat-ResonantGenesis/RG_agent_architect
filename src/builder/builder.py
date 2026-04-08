@@ -54,17 +54,19 @@ class Builder:
             needs_build=False, max_loops=max_loops,
             temperature=temperature, model=model)
 
-        # 3. Blockchain: identity hash + on-chain registration + agent block + wallet + hash sphere
+        # 3. Blockchain: identity hash first (needed for agent block)
+        identity_result = await chain_client.register_agent_identity(agent_id, name, self.workspace_id, self.user_id)
+        identity_hash = identity_result.get("hash", "") if isinstance(identity_result, dict) else ""
+
+        # 4. Parallel: on-chain registration + agent block (with hash) + wallet + hash sphere
         chain_results = await asyncio.gather(
-            chain_client.register_agent_identity(agent_id, name, self.workspace_id, self.user_id),
             chain_client.register_on_chain(agent_id, name, self.user_id),
-            chain_client.create_agent_block(agent_id, name, goal, self.user_id),
+            chain_client.create_agent_block(agent_id, name, goal, self.user_id, agent_hash=identity_hash),
             chain_client.create_agent_wallet(agent_id, self.user_id),
             chain_client.create_agent_hash_sphere(agent_id, name),
             return_exceptions=True,
         )
-        identity_hash = chain_results[0].get("hash", "") if isinstance(chain_results[0], dict) else ""
-        wallet_addr = chain_results[3].get("address", "") if isinstance(chain_results[3], dict) else ""
+        wallet_addr = chain_results[2].get("address", "") if isinstance(chain_results[2], dict) else ""
 
         # 4. Store build run
         await self.ws_db.save_run(

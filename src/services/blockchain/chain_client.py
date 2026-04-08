@@ -56,10 +56,11 @@ async def register_on_chain(agent_id: str, name: str, owner_id: str = "") -> Dic
     return result
 
 
-async def create_agent_block(agent_id: str, name: str, goal: str, owner_id: str = "") -> Dict:
+async def create_agent_block(agent_id: str, name: str, goal: str, owner_id: str = "", agent_hash: str = "") -> Dict:
     """Create agent block in blockchain."""
     return await _post("/blockchain/blocks/agent", {
         "agent_id": agent_id,
+        "agent_hash": agent_hash or agent_id,
         "name": name,
         "goal": goal,
         "owner_id": owner_id,

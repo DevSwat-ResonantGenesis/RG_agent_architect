@@ -7,7 +7,7 @@ LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://llm_service:8000")
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory_service:8000")
 
 # ── Orchestrator tuning ──
-ORCHESTRATOR_MAX_ITERATIONS = 20
+ORCHESTRATOR_MAX_ITERATIONS = 3
 MAX_TOKENS = 4096
 HISTORY_DEPTH = 10
 POLL_MAX_ROUNDS = 40

@@ -71,6 +71,9 @@ class Orchestrator:
             assistant_msg["tool_calls"] = raw_tool_calls
             messages.append(assistant_msg)
 
+            TERMINAL_TOOLS = {"build_agent", "run_agent", "delete_agent", "set_trigger", "stop_run"}
+            hit_terminal = False
+
             for tc in raw_tool_calls:
                 tc_id = tc.get("id", "")
                 fn = tc.get("function", {})
@@ -94,6 +97,23 @@ class Orchestrator:
                     "tool_call_id": tc_id,
                     "content": json.dumps(result, default=str) if not isinstance(result, str) else result,
                 })
+
+                if name in TERMINAL_TOOLS:
+                    hit_terminal = True
+                    # Generate final summary from last tool result
+                    outcome = result.get("outcome", "done") if isinstance(result, dict) else "done"
+                    agent_name = result.get("name", "") if isinstance(result, dict) else ""
+                    if name == "build_agent" and outcome == "SUCCESS":
+                        final_text = f"Agent **{agent_name}** built successfully."
+                    elif name == "run_agent":
+                        final_text = f"Agent run completed: {result.get('summary', outcome) if isinstance(result, dict) else outcome}"
+                    elif name == "delete_agent":
+                        final_text = "Agent deleted."
+                    elif name == "set_trigger":
+                        final_text = f"Schedule set: {result.get('interval', 'daily') if isinstance(result, dict) else 'daily'}"
+
+            if hit_terminal:
+                break
 
         return {"text": final_text, "mode": mode.value}
 
