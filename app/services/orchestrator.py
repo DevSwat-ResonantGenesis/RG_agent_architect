@@ -15,6 +15,7 @@ import json
 import logging
 import re
 
+from ..config import settings
 from .prompts import build_system_prompt
 from .llm_client import llm_call_with_tools, llm_json
 from .context import fetch_workspace_context, store_memory
@@ -24,7 +25,10 @@ from .tool_executor import execute_tool
 logger = logging.getLogger(__name__)
 
 PANEL_URL = "/agents?embed=1"
-MAX_TOOL_ITERATIONS = 10  # Safety limit on ReAct loop
+MAX_TOOL_ITERATIONS = settings.ORCHESTRATOR_MAX_ITERATIONS  # 20 (was 10)
+MAX_TOKENS = settings.ORCHESTRATOR_MAX_TOKENS  # 4096 (was 2000)
+HISTORY_DEPTH = settings.ORCHESTRATOR_HISTORY_DEPTH  # 10 (was 6)
+MSG_TRUNCATE = settings.ORCHESTRATOR_MSG_TRUNCATE  # 2000 (was 1000)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -68,11 +72,11 @@ async def orchestrate(
     messages = [{"role": "system", "content": full_system}]
 
     prev_msgs = context.get("messages") or context.get("previousMessages") or context.get("previous_messages") or []
-    for m in prev_msgs[-6:]:
+    for m in prev_msgs[-HISTORY_DEPTH:]:
         role = m.get("role", "user")
         content = m.get("content", "")
         if role in ("user", "assistant") and content:
-            messages.append({"role": role, "content": content[:1000]})
+            messages.append({"role": role, "content": content[:MSG_TRUNCATE]})
 
     messages.append({"role": "user", "content": message})
 
@@ -84,7 +88,7 @@ async def orchestrate(
             messages, AGENT_TOOLS,
             user_api_keys=user_api_keys,
             temperature=0.2,
-            max_tokens=2000,
+            max_tokens=MAX_TOKENS,
         )
 
         if not response:
@@ -116,6 +120,10 @@ async def orchestrate(
             # Special case: respond_to_user is terminal
             if tool_name == "respond_to_user":
                 return _format_respond_to_user(arguments, agents)
+
+            # Special case: present_options is semi-terminal (wait for user input)
+            if tool_name == "present_options":
+                return _format_present_options(arguments, agents)
 
             # Execute the tool
             result = await execute_tool(tool_name, arguments, headers, agents)
@@ -257,6 +265,43 @@ def _format_respond_to_user(arguments: dict, agents: list[dict]) -> dict:
             "allow_custom": True,
         },
     }
+
+
+def _format_present_options(arguments: dict, agents: list[dict]) -> dict:
+    """Format present_options tool call — semi-terminal, returns to user with choices."""
+    question = arguments.get("question", "")
+    options = arguments.get("options", [])
+    question_type = arguments.get("question_type", "PickOne")
+    scope_warning = arguments.get("scope_warning")
+
+    formatted_options = []
+    for opt in options[:4]:
+        formatted_options.append({
+            "label": opt.get("label", "Option"),
+            "value": opt.get("value", opt.get("label", "continue")),
+            "description": opt.get("description", ""),
+            "icon": opt.get("icon", "▶️"),
+        })
+
+    result = {
+        "success": True,
+        "action": "open_agents_panel",
+        "panel_url": PANEL_URL,
+        "intent": "PRESENT_OPTIONS",
+        "operation": "react_present_options",
+        "summary": question,
+        "present_options": {
+            "_type": "present_options",
+            "title": question,
+            "options": formatted_options,
+            "question_type": question_type,
+            "allow_custom": True,
+        },
+    }
+    if scope_warning:
+        result["scope_warning"] = scope_warning
+
+    return result
 
 
 def _fallback_response(message: str, agents: list[dict]) -> dict:

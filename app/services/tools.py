@@ -366,6 +366,159 @@ AGENT_TOOLS = [
             },
         },
     },
+    # ── NEW TOOLS: Twin-level orchestrator capabilities ──
+    {
+        "type": "function",
+        "function": {
+            "name": "workspace_snapshot",
+            "description": "Get a complete workspace overview in one call: all agents with status, available platform tools, and user memory facts. Use this at the START of every session to understand the user's current state before taking any action.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_snapshot",
+            "description": "Deep inspect a specific agent: full config, system_prompt/instructions, recent run history with outcomes, tools assigned, budget status. Use to understand what an agent does before modifying or diagnosing it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent to inspect deeply",
+                    },
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_snapshot",
+            "description": "Get the full trace of a single agent run: every decision, tool call, result, and error. Use to diagnose why a specific run failed or to review what the agent actually did.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session/run ID to inspect. If omitted, uses the most recent run.",
+                    },
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_user_memory",
+            "description": "Recall persistent user facts stored from previous sessions — role, company, preferences, past decisions. Use at session start or when you need context about the user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional search query to filter memories. If omitted, returns general user facts.",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_user_memory",
+            "description": "Store a new user fact for future sessions. Use when the user shares their role, company, preferences, or any persistent context. Facts persist across all conversations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The fact to store (e.g. 'User is a SaaS founder building AI tools')",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Optional metadata: {type: 'preference'|'role'|'company'|'decision'}",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "present_options",
+            "description": "Show clickable choices to the user in the chat interface. Use for confirmations, scope decisions, or collecting input. This is a SEMI-TERMINAL action — after calling this, STOP the loop and wait for user response.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question or prompt to show the user",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "Button text"},
+                                "value": {"type": "string", "description": "Value returned when selected"},
+                                "description": {"type": "string", "description": "Optional subtitle"},
+                                "icon": {"type": "string", "description": "Optional emoji icon"},
+                            },
+                            "required": ["label", "value"],
+                        },
+                        "description": "2-4 clickable option buttons",
+                    },
+                    "question_type": {
+                        "type": "string",
+                        "enum": ["PickOne", "PickMultiple", "OpenEnded", "Secret"],
+                        "description": "Type of input: PickOne (radio), PickMultiple (checkboxes), OpenEnded (text), Secret (masked password)",
+                    },
+                    "scope_warning": {
+                        "type": "object",
+                        "description": "Optional scope risk warning: {level: 'high'|'moderate', reason: '...', recommendation: '...'}",
+                    },
+                },
+                "required": ["question", "options"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_credits_info",
+            "description": "Check the user's credit balance and billing plan. Use when the user asks about costs, credits, or before creating expensive agents.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get the current UTC timestamp. Use for scheduling decisions or time-sensitive operations.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

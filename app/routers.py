@@ -62,10 +62,9 @@ async def orchestrate_endpoint(req: OrchestrateRequest, request: Request):
 
 @router.post("/classify-intent")
 async def classify_intent_endpoint(req: ClassifyRequest):
-    """Standalone intent classification (used by chat service for routing)."""
-    from .services.orchestrator import _classify_intent
-    intent = await _classify_intent(req.message, req.user_api_keys)
-    return {"intent": intent, "message": req.message[:200]}
+    """Standalone intent classification (used by chat service for routing).
+    Simplified — always returns 'agent_architect' since this service only handles architect requests."""
+    return {"intent": "agent_architect", "message": req.message[:200]}
 
 
 @router.post("/health-check")

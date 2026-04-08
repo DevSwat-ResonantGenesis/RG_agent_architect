@@ -102,7 +102,7 @@ def build_safety_config(tools: list[str], mode: str = "governed") -> dict:
     """Build safety configuration based on tools and mode."""
     config = {
         "max_tool_calls": 50,
-        "max_loops": 25,
+        "max_loops": 30,
         "timeout_seconds": 300,
         "allow_external_requests": any(
             t in tools for t in ("external_http_request", "fetch_url", "read_webpage")

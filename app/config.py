@@ -21,9 +21,15 @@ class Settings:
     REASONING_MODEL: str = "gpt-4o"
 
     # Execution
-    EXECUTION_TIMEOUT: float = float(os.getenv("EXECUTION_TIMEOUT", "120"))
-    POLL_INTERVAL: float = 3.0
-    POLL_MAX_ROUNDS: int = 5
+    EXECUTION_TIMEOUT: float = float(os.getenv("EXECUTION_TIMEOUT", "180"))
+    POLL_INTERVAL: float = 5.0
+    POLL_MAX_ROUNDS: int = 40  # 5s * 40 = 200s = 3.3 min polling window
+
+    # Orchestrator ReAct loop
+    ORCHESTRATOR_MAX_ITERATIONS: int = 20  # was 10 — need more for complex flows
+    ORCHESTRATOR_MAX_TOKENS: int = 4096  # was 2000 — LLM needs room to think
+    ORCHESTRATOR_HISTORY_DEPTH: int = 10  # was 6 — keep more conversation context
+    ORCHESTRATOR_MSG_TRUNCATE: int = 2000  # was 1000 — preserve message detail
 
     def groq_keys(self) -> list[str]:
         keys = []

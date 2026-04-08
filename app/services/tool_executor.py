@@ -5,8 +5,10 @@ Executes tool calls from the LLM agent loop against the Agent Engine API.
 Each function takes parsed arguments and returns a string result that gets
 fed back into the LLM conversation as a tool response.
 """
+import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
@@ -71,8 +73,23 @@ async def execute_tool(
             return await _execute_built_tool(arguments, headers)
         elif tool_name == "health_check_agents":
             return await _health_check_agents(arguments, headers, agents_cache)
+        elif tool_name == "workspace_snapshot":
+            return await _workspace_snapshot(arguments, headers, agents_cache)
+        elif tool_name == "agent_snapshot":
+            return await _agent_snapshot(arguments, headers, agents_cache)
+        elif tool_name == "run_snapshot":
+            return await _run_snapshot(arguments, headers, agents_cache)
+        elif tool_name == "get_user_memory":
+            return await _get_user_memory(arguments, headers)
+        elif tool_name == "update_user_memory":
+            return await _update_user_memory(arguments, headers)
+        elif tool_name == "present_options":
+            return await _present_options(arguments)
+        elif tool_name == "get_credits_info":
+            return await _get_credits_info(headers)
+        elif tool_name == "get_current_time":
+            return _get_current_time()
         elif tool_name == "respond_to_user":
-            # This is handled by the orchestrator loop, not here
             return "respond_to_user is a terminal action — handled by orchestrator."
         else:
             return f"Unknown tool: {tool_name}"
@@ -781,3 +798,251 @@ async def _stop_agent(args: dict, headers: dict, agents_cache: list[dict]) -> st
                 return json.dumps({"error": f"Stop failed ({resp.status_code}): {resp.text[:200]}"})
     except Exception as e:
         return json.dumps({"error": f"Stop failed: {e}"})
+
+
+# ═══════════════════════════════════════════════════════════════
+# NEW TWIN-LEVEL TOOLS
+# ═══════════════════════════════════════════════════════════════
+
+async def _workspace_snapshot(args: dict, headers: dict, agents_cache: list[dict]) -> str:
+    """Get complete workspace overview: agents + tools + user memory in one call."""
+    from .context import fetch_workspace_context
+
+    user_id = headers.get("x-user-id", "")
+    ctx = await fetch_workspace_context(user_id, headers)
+
+    agents = ctx.get("agents", [])
+    agent_summaries = []
+    for a in agents[:20]:
+        status = "active" if a.get("is_active") else "inactive"
+        tools_str = ", ".join(a.get("tools", [])[:5])
+        agent_summaries.append({
+            "name": a.get("name", "?"),
+            "status": status,
+            "model": a.get("model", "?"),
+            "tools": tools_str,
+            "mode": a.get("mode", "governed"),
+        })
+
+    return json.dumps({
+        "agents": agent_summaries,
+        "agent_count": len(agents),
+        "tools_summary": ctx.get("tools_summary", "160+ tools available"),
+        "tools_by_category": ctx.get("tools_by_category", {}),
+        "user_memory": ctx.get("memory_facts", ""),
+    })
+
+
+async def _agent_snapshot(args: dict, headers: dict, agents_cache: list[dict]) -> str:
+    """Deep inspect: full config, instructions, run history, budget."""
+    agent_name = args.get("agent_name", "")
+    agent = _find_agent(agent_name, agents_cache)
+    if not agent:
+        return json.dumps({"error": f"Agent '{agent_name}' not found."})
+
+    agent_id = agent["id"]
+    result = {"agent": agent}
+
+    try:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as c:
+            # Fetch full agent details + sessions in parallel
+            detail_task = c.get(f"{AGENT_ENGINE_URL}/agents/{agent_id}", headers=headers)
+            sessions_task = c.get(
+                f"{AGENT_ENGINE_URL}/execution/history/{agent_id}",
+                headers=headers, params={"limit": 5},
+            )
+
+            detail_resp, sessions_resp = await asyncio.gather(
+                detail_task, sessions_task, return_exceptions=True,
+            )
+
+            if not isinstance(detail_resp, Exception) and detail_resp.status_code == 200:
+                full = detail_resp.json()
+                result["config"] = {
+                    "system_prompt": (full.get("system_prompt") or "")[:500],
+                    "goal": full.get("goal") or full.get("description", ""),
+                    "tools": full.get("tools", []),
+                    "model": full.get("model", "?"),
+                    "provider": full.get("provider", "?"),
+                    "mode": full.get("mode", "governed"),
+                    "safety_config": full.get("safety_config", {}),
+                    "budget_config": full.get("budget_config", {}),
+                    "is_active": full.get("is_active", False),
+                }
+
+            if not isinstance(sessions_resp, Exception) and sessions_resp.status_code == 200:
+                sessions = sessions_resp.json()
+                if isinstance(sessions, list):
+                    result["recent_runs"] = [
+                        {
+                            "id": str(s.get("id", "?"))[:12],
+                            "status": s.get("status", "?"),
+                            "loops": s.get("loop_count", 0),
+                            "error": (s.get("error_message") or "")[:150],
+                            "output": (str(s.get("output") or s.get("final_output") or ""))[:200],
+                        }
+                        for s in sessions[:5]
+                    ]
+    except Exception as e:
+        result["fetch_error"] = str(e)
+
+    return json.dumps(result)
+
+
+async def _run_snapshot(args: dict, headers: dict, agents_cache: list[dict]) -> str:
+    """Full trace of a single run: decisions, tool calls, results."""
+    agent_name = args.get("agent_name", "")
+    session_id = args.get("session_id")
+    agent = _find_agent(agent_name, agents_cache)
+    if not agent:
+        return json.dumps({"error": f"Agent '{agent_name}' not found."})
+
+    agent_id = agent["id"]
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as c:
+            if session_id:
+                # Fetch specific session
+                resp = await c.get(
+                    f"{AGENT_ENGINE_URL}/execution/session/{session_id}",
+                    headers=headers,
+                )
+            else:
+                # Fetch most recent session
+                resp = await c.get(
+                    f"{AGENT_ENGINE_URL}/execution/history/{agent_id}",
+                    headers=headers, params={"limit": 1},
+                )
+
+            if resp.status_code != 200:
+                return json.dumps({"error": f"Failed to fetch run data: HTTP {resp.status_code}"})
+
+            data = resp.json()
+            session = data[0] if isinstance(data, list) and data else data if isinstance(data, dict) else None
+
+            if not session:
+                return json.dumps({"error": "No runs found for this agent."})
+
+            return json.dumps({
+                "agent": agent_name,
+                "session_id": str(session.get("id", "?"))[:12],
+                "status": session.get("status", "?"),
+                "loop_count": session.get("loop_count", 0),
+                "output": str(session.get("output") or session.get("final_output") or "")[:1000],
+                "error": (session.get("error_message") or session.get("error") or "")[:300],
+                "tool_calls": session.get("tool_calls", [])[:20],
+                "created_at": str(session.get("created_at", "")),
+            })
+    except Exception as e:
+        return json.dumps({"error": f"Run snapshot failed: {e}"})
+
+
+async def _get_user_memory(args: dict, headers: dict) -> str:
+    """Recall persistent user facts from memory service."""
+    query = args.get("query", "user preferences role company")
+    user_id = headers.get("x-user-id", "")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            resp = await c.post(
+                f"{settings.MEMORY_SERVICE_URL}/memory/search",
+                json={"query": query, "user_id": user_id, "limit": 10},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                if results:
+                    facts = [
+                        {"content": m.get("content", "")[:300], "type": m.get("metadata", {}).get("type", "fact")}
+                        for m in results[:10]
+                    ]
+                    return json.dumps({"facts": facts, "count": len(facts)})
+                return json.dumps({"facts": [], "count": 0, "note": "No memories found for this user."})
+            return json.dumps({"error": f"Memory search failed: HTTP {resp.status_code}"})
+    except Exception as e:
+        return json.dumps({"error": f"Memory search failed: {e}"})
+
+
+async def _update_user_memory(args: dict, headers: dict) -> str:
+    """Store a new user fact in memory service."""
+    content = args.get("content", "")
+    metadata = args.get("metadata", {})
+    user_id = headers.get("x-user-id", "")
+
+    if not content:
+        return json.dumps({"error": "Content is required."})
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            resp = await c.post(
+                f"{settings.MEMORY_SERVICE_URL}/memory/ingest",
+                json={
+                    "user_id": user_id,
+                    "source": "agent_architect",
+                    "content": content,
+                    "metadata": {**metadata, "origin": "agent_architect"},
+                },
+            )
+            if resp.status_code in (200, 201):
+                return json.dumps({"success": True, "stored": content[:100]})
+            return json.dumps({"error": f"Memory store failed: HTTP {resp.status_code}"})
+    except Exception as e:
+        return json.dumps({"error": f"Memory store failed: {e}"})
+
+
+async def _present_options(args: dict) -> str:
+    """Return structured options for the frontend to render as clickable choices.
+    This is a semi-terminal action — the orchestrator should stop after this."""
+    question = args.get("question", "")
+    options = args.get("options", [])
+    question_type = args.get("question_type", "PickOne")
+    scope_warning = args.get("scope_warning")
+
+    result = {
+        "type": "present_options",
+        "question": question,
+        "options": options,
+        "question_type": question_type,
+    }
+    if scope_warning:
+        result["scope_warning"] = scope_warning
+
+    return json.dumps(result)
+
+
+async def _get_credits_info(headers: dict) -> str:
+    """Check user credit balance and billing plan."""
+    user_id = headers.get("x-user-id", "")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            # Try credits endpoint
+            resp = await c.get(
+                f"{AGENT_ENGINE_URL}/credits/balance",
+                headers=headers,
+                params={"user_id": user_id},
+            )
+            if resp.status_code == 200:
+                return json.dumps(resp.json())
+
+            # Fallback: try billing endpoint
+            resp2 = await c.get(
+                f"{AGENT_ENGINE_URL}/billing/info",
+                headers=headers,
+            )
+            if resp2.status_code == 200:
+                return json.dumps(resp2.json())
+
+            return json.dumps({"note": "Credit info not available. Platform may not have billing service configured."})
+    except Exception as e:
+        return json.dumps({"error": f"Credits check failed: {e}"})
+
+
+def _get_current_time() -> str:
+    """Return current UTC timestamp."""
+    now = datetime.now(timezone.utc)
+    return json.dumps({
+        "utc": now.isoformat(),
+        "unix": int(now.timestamp()),
+        "formatted": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+    })

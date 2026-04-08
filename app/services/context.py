@@ -47,13 +47,41 @@ async def fetch_workspace_context(
 
     async def _fetch_tools():
         try:
-            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as c:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+                # Try detailed tool list first
                 r = await c.get(
-                    f"{settings.AGENT_ENGINE_URL}/agents/available-tools",
+                    f"{settings.AGENT_ENGINE_URL}/agents/tools/list",
                     headers=headers,
                 )
                 if r.status_code == 200:
                     data = r.json()
+                    tools = data if isinstance(data, list) else data.get("tools", [])
+                    if tools:
+                        # Group by category with names and descriptions
+                        by_cat: dict[str, list[str]] = {}
+                        for t in tools:
+                            if isinstance(t, dict):
+                                cat = t.get("category", "other")
+                                name = t.get("name", "?")
+                                desc = (t.get("description") or "")[:60]
+                                by_cat.setdefault(cat, []).append(f"{name}" + (f" ({desc})" if desc else ""))
+                            else:
+                                by_cat.setdefault("other", []).append(str(t))
+                        # Build readable summary
+                        lines = [f"{len(tools)} tools available:"]
+                        for cat, names in sorted(by_cat.items()):
+                            lines.append(f"  {cat}: {', '.join(names[:12])}" + (f" +{len(names)-12} more" if len(names) > 12 else ""))
+                        ctx["tools_summary"] = "\n".join(lines)
+                        ctx["tools_by_category"] = by_cat
+                        return
+
+                # Fallback: simpler endpoint
+                r2 = await c.get(
+                    f"{settings.AGENT_ENGINE_URL}/agents/available-tools",
+                    headers=headers,
+                )
+                if r2.status_code == 200:
+                    data = r2.json()
                     count = len(data.get("tools", [])) if isinstance(data, dict) else len(data) if isinstance(data, list) else 0
                     if count:
                         ctx["tools_summary"] = f"{count} tools available"
