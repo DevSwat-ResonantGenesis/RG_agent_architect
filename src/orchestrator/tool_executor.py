@@ -28,7 +28,10 @@ class ToolExecutor:
     async def _tool_run_snapshot(self, a): return await self.ws_db.get_run_snapshot(a["run_id"])
     async def _tool_build_agent(self, a):
         from src.builder.builder import Builder
-        return await Builder(self.workspace_id).build(a.get("name",""), a.get("goal",""), a.get("icon","🤖"))
+        return await Builder(self.workspace_id).build(
+            name=a.get("name",""), goal=a.get("goal",""), icon=a.get("icon","🤖"),
+            tools=a.get("tools", []), max_loops=a.get("max_loops", 30),
+            temperature=a.get("temperature", 0.5), model=a.get("model", "groq/llama-3.3-70b-versatile"))
     async def _tool_continue_build(self, a):
         from src.builder.builder import Builder
         return await Builder(self.workspace_id).continue_build(a["agent_id"], a.get("instructions",""))
@@ -40,7 +43,8 @@ class ToolExecutor:
         return await Runner(self.workspace_id).run(a["agent_id"], a.get("goal"))
     async def _tool_stop_run(self, a): return await self.ws_db.stop_run(a["run_id"])
     async def _tool_delete_agent(self, a): return await self.ws_db.delete_agent(a["agent_id"])
-    async def _tool_set_trigger(self, a): return await self.ws_db.set_trigger(a["agent_id"], **a)
+    async def _tool_set_trigger(self, a):
+        return await self.ws_db.set_trigger(a["agent_id"], interval=a.get("interval","daily"), timezone=a.get("timezone","UTC"))
     async def _tool_set_workspace_name(self, a): return await self.ws_db.set_workspace_name(a.get("name",""), a.get("icon",""))
     async def _tool_open_interface_editor(self, a): return {"status": "editor_opened", "agent_id": a["agent_id"]}
     async def _tool_present_options(self, a):
