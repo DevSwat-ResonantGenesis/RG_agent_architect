@@ -15,15 +15,20 @@ def _pg_url() -> str:
     url = DATABASE_URL
     if url.startswith("postgresql+asyncpg://"):
         url = url.replace("postgresql+asyncpg://", "postgresql://")
-    if "?ssl=require" not in url and "sslmode=" not in url:
-        url += "?ssl=require" if "?" not in url else "&ssl=require"
+    for suffix in ("?ssl=require", "&ssl=require", "?sslmode=require", "&sslmode=require"):
+        url = url.replace(suffix, "")
+    url = url.rstrip("?&")
     return url
 
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(_pg_url(), min_size=2, max_size=10)
+        import ssl as _ssl
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        _pool = await asyncpg.create_pool(_pg_url(), min_size=2, max_size=10, ssl=ctx)
         await _init_schema(_pool)
     return _pool
 
