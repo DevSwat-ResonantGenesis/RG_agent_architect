@@ -57,7 +57,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "create_agent",
-            "description": "Create a new agent with full configuration. Use after crafting a goal and determining the right tools/model. Provide all fields for a production-ready agent.",
+            "description": "Create a new agent with full configuration. You MUST provide a detailed system_prompt with step-by-step INSTRUCTIONS — this is what makes agents work. After creating, ALWAYS call run_agent immediately. Never create without running.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -71,7 +71,7 @@ AGENT_TOOLS = [
                     },
                     "system_prompt": {
                         "type": "string",
-                        "description": "System prompt defining the agent's role and behavior",
+                        "description": "CRITICAL: Detailed step-by-step instructions for the agent. Must include: role definition, numbered steps with specific tool names and queries, expected output format, where to store results, and constraints. This is the agent's playbook — without it, the agent will wander aimlessly.",
                     },
                     "goal": {
                         "type": "string",
@@ -100,6 +100,10 @@ AGENT_TOOLS = [
                         "enum": ["governed", "supervised", "unbounded"],
                         "description": "Autonomy mode. Default: governed",
                     },
+                    "max_loops": {
+                        "type": "integer",
+                        "description": "Maximum execution iterations. Default: 25. Set 30-50 for complex multi-step tasks, 15-20 for simple tasks. NEVER use default for complex work.",
+                    },
                     "budget": {
                         "type": "object",
                         "properties": {
@@ -119,7 +123,7 @@ AGENT_TOOLS = [
                         "description": "Budget limits for the agent. Smart defaults applied if omitted.",
                     },
                 },
-                "required": ["name", "description", "goal", "tools"],
+                "required": ["name", "description", "system_prompt", "goal", "tools"],
             },
         },
     },
@@ -127,7 +131,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "run_agent",
-            "description": "Execute an existing agent immediately. Starts a run and returns the result or status.",
+            "description": "Execute an existing agent immediately. ALWAYS call this right after create_agent — never leave an agent unrun. Returns the execution result or status.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -366,7 +370,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "respond_to_user",
-            "description": "Send a final response to the user. Use this when you have gathered all needed information and want to present your answer, plan preview, brainstorm ideas, or status report. Include present_options for follow-up actions.",
+            "description": "Send a final response to the user. ONLY use this AFTER you have completed all actions (create + run + get results). Never use this just to ask the user what to do — act first, report results after. Include follow-up options.",
             "parameters": {
                 "type": "object",
                 "properties": {

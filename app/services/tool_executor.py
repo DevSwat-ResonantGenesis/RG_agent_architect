@@ -206,10 +206,32 @@ async def _delete_agent(args: dict, headers: dict, agents_cache: list[dict]) -> 
 async def _create_agent(args: dict, headers: dict) -> str:
     """Create a new agent via Agent Engine API."""
     budget = args.get("budget") or {}
+    max_loops = args.get("max_loops", 30)  # Default 30, not 25
+
+    # System prompt is CRITICAL — it's the agent's step-by-step instructions
+    system_prompt = args.get("system_prompt")
+    if not system_prompt or len(system_prompt) < 50:
+        # Generate a reasonable fallback if Architect didn't provide detailed instructions
+        name = args.get("name", "Agent")
+        goal = args.get("goal", "")
+        tools = args.get("tools", [])
+        system_prompt = (
+            f"You are {name}, an autonomous agent.\n\n"
+            f"YOUR GOAL: {goal}\n\n"
+            f"INSTRUCTIONS:\n"
+            f"1. Use your available tools ({', '.join(tools)}) to accomplish the goal above.\n"
+            f"2. Break the task into clear steps and execute them one by one.\n"
+            f"3. After collecting results, compile them into a structured format.\n"
+            f"4. Store your final results using Memory Store so they are saved.\n"
+            f"5. Do NOT hallucinate data — only report what your tools actually returned.\n"
+            f"6. Include source URLs for any web-sourced information.\n"
+        )
+        logger.warning(f"[TOOL] create_agent: system_prompt was missing/short, generated fallback for '{name}'")
+
     payload = {
         "name": args.get("name", "New Agent"),
         "description": args.get("description", ""),
-        "system_prompt": args.get("system_prompt", f"You are {args.get('name', 'an agent')}. {args.get('description', '')}"),
+        "system_prompt": system_prompt,
         "goal": args.get("goal", ""),
         "provider": args.get("provider", "groq"),
         "model": args.get("model", "llama-3.3-70b-versatile"),
@@ -219,6 +241,11 @@ async def _create_agent(args: dict, headers: dict) -> str:
         "mode": args.get("mode", "governed"),
         "is_active": True,
     }
+
+    # Pass max_loops via safety_config
+    safety_config = {"max_loops": max_loops}
+    payload["safety_config"] = safety_config
+
     if budget:
         payload["budget_config"] = {
             "max_tokens_per_run": budget.get("max_tokens_per_run", 50000),
