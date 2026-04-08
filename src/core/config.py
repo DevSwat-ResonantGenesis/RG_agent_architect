@@ -31,7 +31,9 @@ PLANS = {
 
 # ── API Keys (from .env.production) ──
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+_groq_raw = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY = _groq_raw.split(",")[0].strip() if _groq_raw else ""
+GROQ_API_KEY_POOL = [k.strip() for k in _groq_raw.split(",") if k.strip()]
 GROQ_API_KEY_2 = os.getenv("GROQ_API_KEY_2", "")
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "")
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
