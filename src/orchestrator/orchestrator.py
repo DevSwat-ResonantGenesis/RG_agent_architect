@@ -83,10 +83,12 @@ class Orchestrator:
                 except json.JSONDecodeError:
                     args = {}
 
-                logger.info(f"[Orch] tool: {name}({list(args.keys())})")
+                logger.warning(f"[Orch] tool: {name}({list(args.keys())})")
                 try:
                     result = await self.tool_executor.execute(name, args)
+                    logger.warning(f"[Orch] result: {str(result)[:200]}")
                 except Exception as e:
+                    logger.error(f"[Orch] tool {name} exception: {e}")
                     result = {"error": str(e)}
 
                 if name == "present_options":
@@ -100,17 +102,24 @@ class Orchestrator:
 
                 if name in TERMINAL_TOOLS:
                     hit_terminal = True
-                    # Generate final summary from last tool result
-                    outcome = result.get("outcome", "done") if isinstance(result, dict) else "done"
-                    agent_name = result.get("name", "") if isinstance(result, dict) else ""
-                    if name == "build_agent" and outcome == "SUCCESS":
-                        final_text = f"Agent **{agent_name}** built successfully."
-                    elif name == "run_agent":
-                        final_text = f"Agent run completed: {result.get('summary', outcome) if isinstance(result, dict) else outcome}"
-                    elif name == "delete_agent":
-                        final_text = "Agent deleted."
-                    elif name == "set_trigger":
-                        final_text = f"Schedule set: {result.get('interval', 'daily') if isinstance(result, dict) else 'daily'}"
+                    if isinstance(result, dict):
+                        outcome = result.get("outcome", "done")
+                        agent_name = result.get("name", "")
+                        err = result.get("error", "")
+                        if err:
+                            final_text = f"Error: {err}"
+                        elif name == "build_agent" and outcome == "SUCCESS":
+                            final_text = f"Agent **{agent_name}** created. Identity registered on blockchain."
+                        elif name == "run_agent":
+                            final_text = f"Run complete: {result.get('summary', outcome)}"
+                        elif name == "delete_agent":
+                            final_text = "Agent deleted."
+                        elif name == "set_trigger":
+                            final_text = f"Scheduled: {result.get('interval', 'daily')}"
+                        else:
+                            final_text = f"{name} done."
+                    else:
+                        final_text = str(result) if result else f"{name} completed."
 
             if hit_terminal:
                 break
