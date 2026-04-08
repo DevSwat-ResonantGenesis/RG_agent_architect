@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.core.config import HISTORY_DEPTH, ORCHESTRATOR_MAX_ITERATIONS
+from src.core.config import HISTORY_DEPTH
 from src.core.context import fetch_workspace_context
 from src.core.llm_client import call_llm
 from src.models.agent import OperationMode
@@ -14,6 +14,8 @@ from src.prompts.mode_classifier import classify_mode
 from src.prompts.system_prompt import PLATFORM_PROMPT
 
 logger = logging.getLogger(__name__)
+
+MAX_TOOL_LOOPS = 5
 
 
 class Orchestrator:
@@ -28,6 +30,37 @@ class Orchestrator:
         self.context = await fetch_workspace_context(self.workspace_id, user_id=self.user_id)
         return self.context
 
+    def _build_context_block(self) -> str:
+        """Build a context summary so the LLM knows the current workspace state."""
+        if not self.context:
+            return ""
+        parts = []
+        ws = self.context.get("workspace", {})
+        agents = ws.get("agents", [])
+        if agents:
+            lines = []
+            for a in agents:
+                lines.append(f"  {a.get('icon','🤖')} {a['name']} (id:{a['id']}) — {a.get('goal','')}")
+            parts.append("AGENTS:\n" + "\n".join(lines))
+        else:
+            parts.append("WORKSPACE: empty, no agents yet.")
+
+        tools = self.context.get("tools", [])
+        builtin = [t["name"] for t in tools if t.get("category") == "builtin"]
+        if builtin:
+            parts.append(f"TOOLS: {', '.join(builtin)}")
+
+        integrations = self.context.get("integrations", {})
+        connected = integrations.get("connected", [])
+        if connected:
+            parts.append(f"CONNECTED: {', '.join(connected)}")
+
+        economy = self.context.get("economy", {})
+        if economy:
+            parts.append(f"PLAN: {economy.get('plan','free')} | CREDITS: {economy.get('credits_remaining',0)}")
+
+        return "\n".join(parts)
+
     async def handle_message(self, user_message: str) -> Dict[str, Any]:
         if not self.context:
             await self.initialize_session()
@@ -38,14 +71,21 @@ class Orchestrator:
             self.history = self.history[-HISTORY_DEPTH * 2:]
         response = await self._run_loop(mode)
         self.history.append({"role": "assistant", "content": response.get("text", "")})
+        # Refresh context after actions
+        await self.initialize_session()
         return response
 
     async def _run_loop(self, mode: OperationMode) -> Dict[str, Any]:
-        messages = [{"role": "system", "content": PLATFORM_PROMPT}]
+        context_block = self._build_context_block()
+        system_content = PLATFORM_PROMPT
+        if context_block:
+            system_content += f"\n<context>\n{context_block}\n</context>"
+
+        messages = [{"role": "system", "content": system_content}]
         messages.extend(self.history)
         final_text = ""
 
-        for iteration in range(ORCHESTRATOR_MAX_ITERATIONS):
+        for iteration in range(MAX_TOOL_LOOPS):
             try:
                 resp = await call_llm(
                     messages=messages,
@@ -70,9 +110,6 @@ class Orchestrator:
             assistant_msg = {"role": "assistant", "content": content or None}
             assistant_msg["tool_calls"] = raw_tool_calls
             messages.append(assistant_msg)
-
-            TERMINAL_TOOLS = {"build_agent", "run_agent", "delete_agent", "set_trigger", "stop_run"}
-            hit_terminal = False
 
             for tc in raw_tool_calls:
                 tc_id = tc.get("id", "")
@@ -100,29 +137,8 @@ class Orchestrator:
                     "content": json.dumps(result, default=str) if not isinstance(result, str) else result,
                 })
 
-                if name in TERMINAL_TOOLS:
-                    hit_terminal = True
-                    if isinstance(result, dict):
-                        outcome = result.get("outcome", "done")
-                        agent_name = result.get("name", "")
-                        err = result.get("error", "")
-                        if err:
-                            final_text = f"Error: {err}"
-                        elif name == "build_agent" and outcome == "SUCCESS":
-                            final_text = f"Agent **{agent_name}** created. Identity registered on blockchain."
-                        elif name == "run_agent":
-                            final_text = f"Run complete: {result.get('summary', outcome)}"
-                        elif name == "delete_agent":
-                            final_text = "Agent deleted."
-                        elif name == "set_trigger":
-                            final_text = f"Scheduled: {result.get('interval', 'daily')}"
-                        else:
-                            final_text = f"{name} done."
-                    else:
-                        final_text = str(result) if result else f"{name} completed."
-
-            if hit_terminal:
-                break
+            # After tool results, let the LLM generate a natural response
+            # (loop continues — next iteration will call LLM again with tool results)
 
         return {"text": final_text, "mode": mode.value}
 
