@@ -17,14 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
-    def __init__(self, workspace_id: str):
+    def __init__(self, workspace_id: str, user_id: str = ""):
         self.workspace_id = workspace_id
-        self.tool_executor = ToolExecutor(workspace_id)
+        self.user_id = user_id or workspace_id
+        self.tool_executor = ToolExecutor(workspace_id, user_id=self.user_id)
         self.history: List[Dict] = []
         self.context: Optional[Dict[str, Any]] = None
 
     async def initialize_session(self):
-        self.context = await fetch_workspace_context(self.workspace_id)
+        self.context = await fetch_workspace_context(self.workspace_id, user_id=self.user_id)
         return self.context
 
     async def handle_message(self, user_message: str) -> Dict[str, Any]:

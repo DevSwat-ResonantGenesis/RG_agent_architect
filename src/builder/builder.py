@@ -1,4 +1,5 @@
-"""Builder Engine — High-reasoning model: creates agents via LLM"""
+"""Builder Engine — High-reasoning model: creates agents via LLM + blockchain + wallet"""
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -6,6 +7,9 @@ from typing import Any, Dict
 
 from src.core.llm_client import call_llm, REASONING_MODEL
 from src.services.database.workspace_db import WorkspaceDB
+from src.services.blockchain import chain_client
+from src.services.billing import billing_client
+from src.services.memory.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +32,9 @@ OUTPUT FORMAT: (describe expected output structure)"""
 
 
 class Builder:
-    def __init__(self, workspace_id: str):
+    def __init__(self, workspace_id: str, user_id: str = ""):
+        self.workspace_id = workspace_id
+        self.user_id = user_id or workspace_id
         self.ws_db = WorkspaceDB(workspace_id)
 
     async def build(self, name: str, goal: str, icon: str = "🤖",
@@ -38,21 +44,45 @@ class Builder:
         run_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
 
+        # 1. Generate instructions via LLM
         instructions = await self._generate_instructions(goal, tools or [])
 
+        # 2. Save agent to PostgreSQL
         await self.ws_db.save_agent(
             agent_id=agent_id, name=name, goal=goal, icon=icon,
             system_prompt=instructions, tools=tools or [],
             needs_build=False, max_loops=max_loops,
             temperature=temperature, model=model)
 
+        # 3. Blockchain: identity hash + on-chain registration + agent block + wallet + hash sphere
+        chain_results = await asyncio.gather(
+            chain_client.register_agent_identity(agent_id, name, self.workspace_id, self.user_id),
+            chain_client.register_on_chain(agent_id, name, self.user_id),
+            chain_client.create_agent_block(agent_id, name, goal, self.user_id),
+            chain_client.create_agent_wallet(agent_id, self.user_id),
+            chain_client.create_agent_hash_sphere(agent_id, name),
+            return_exceptions=True,
+        )
+        identity_hash = chain_results[0].get("hash", "") if isinstance(chain_results[0], dict) else ""
+        wallet_addr = chain_results[3].get("address", "") if isinstance(chain_results[3], dict) else ""
+
+        # 4. Store build run
         await self.ws_db.save_run(
             run_id=run_id, agent_id=agent_id, outcome="SUCCESS",
             summary=f"Built agent: {name}", loop_count=1,
             started_at=now, finished_at=now)
 
-        logger.info(f"[Builder] Created agent {agent_id}: {name}")
-        return {"agent_id": agent_id, "name": name, "run_id": run_id, "outcome": "SUCCESS"}
+        # 5. Store creation as agent memory/learning
+        mem = MemoryStore(self.workspace_id, agent_id)
+        await mem.store_agent_learning(
+            f"Agent '{name}' created with goal: {goal}. Tools: {tools or []}. Identity: {identity_hash}",
+            run_id=run_id)
+
+        logger.info(f"[Builder] Created agent {agent_id}: {name} | chain={identity_hash[:16]}... wallet={wallet_addr[:16]}...")
+        return {
+            "agent_id": agent_id, "name": name, "run_id": run_id, "outcome": "SUCCESS",
+            "identity_hash": identity_hash, "wallet_address": wallet_addr,
+        }
 
     async def continue_build(self, agent_id: str, instructions: str) -> Dict:
         agent = await self.ws_db.get_agent(agent_id)

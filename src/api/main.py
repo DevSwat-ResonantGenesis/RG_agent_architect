@@ -21,6 +21,7 @@ orchestrators: dict = {}
 class MessageRequest(BaseModel):
     workspace_id: str
     message: str
+    user_id: str = ""
 
 class RunEventRequest(BaseModel):
     workspace_id: str
@@ -30,15 +31,15 @@ class RunEventRequest(BaseModel):
     run_id: str = ""
 
 
-def get_orchestrator(workspace_id: str) -> Orchestrator:
+def get_orchestrator(workspace_id: str, user_id: str = "") -> Orchestrator:
     if workspace_id not in orchestrators:
-        orchestrators[workspace_id] = Orchestrator(workspace_id)
+        orchestrators[workspace_id] = Orchestrator(workspace_id, user_id=user_id)
     return orchestrators[workspace_id]
 
 
 @app.post("/api/message")
 async def handle_message(req: MessageRequest):
-    orch = get_orchestrator(req.workspace_id)
+    orch = get_orchestrator(req.workspace_id, req.user_id)
     return await orch.handle_message(req.message)
 
 @app.post("/api/run-event")

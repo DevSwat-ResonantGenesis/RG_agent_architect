@@ -1,6 +1,6 @@
-"""Persistent Memory — Routes through unified memory_service on Docker network"""
+"""Dual Hash Sphere Memory — user+agent sphere + RAG learning via memory_service"""
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import httpx
 
@@ -10,27 +10,120 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryStore:
-    def __init__(self, workspace_id: str):
+    def __init__(self, workspace_id: str, agent_id: str = ""):
         self.workspace_id = workspace_id
-        self.base = f"{MEMORY_SERVICE_URL}/memory"
+        self.agent_id = agent_id
+        self.base = MEMORY_SERVICE_URL
+
+    # ── User Memory (Hash Sphere — user level) ──
 
     async def get_user_memory(self) -> Dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                r = await c.get(f"{self.base}/user/{self.workspace_id}")
-                if r.status_code == 200:
-                    return r.json()
-        except Exception as e:
-            logger.warning(f"[Memory] get failed: {e}")
-        return {}
+        """Get user-level hash sphere memory."""
+        result = await self._post("/memory/hash-sphere/search", {
+            "query": "user preferences and facts",
+            "user_id": self.workspace_id,
+            "scope": "user",
+            "limit": 20,
+        })
+        return result or {}
 
     async def update_user_memory(self, content: str) -> Dict:
+        """Store fact in user hash sphere."""
+        return await self._post("/rag/memories", {
+            "content": content,
+            "user_id": self.workspace_id,
+            "scope": "user",
+            "type": "fact",
+        })
+
+    # ── Agent Memory (Hash Sphere — agent level) ──
+
+    async def get_agent_memory(self) -> Dict[str, Any]:
+        """Get agent-specific hash sphere memory."""
+        if not self.agent_id:
+            return {}
+        result = await self._post("/memory/hash-sphere/search", {
+            "query": "agent learnings and context",
+            "agent_id": self.agent_id,
+            "user_id": self.workspace_id,
+            "scope": "agent",
+            "limit": 20,
+        })
+        return result or {}
+
+    async def store_agent_learning(self, content: str, run_id: str = "") -> Dict:
+        """Store learning from a run in agent hash sphere."""
+        if not self.agent_id:
+            return {"error": "No agent_id"}
+        return await self._post("/rag/memories", {
+            "content": content,
+            "user_id": self.workspace_id,
+            "agent_id": self.agent_id,
+            "scope": "agent",
+            "type": "learning",
+            "metadata": {"run_id": run_id},
+        })
+
+    # ── Dual Memory (user + agent combined) ──
+
+    async def get_dual_memory(self) -> Dict[str, Any]:
+        """Get both user and agent memory combined."""
+        user_mem = await self.get_user_memory()
+        agent_mem = await self.get_agent_memory() if self.agent_id else {}
+        return {"user_memory": user_mem, "agent_memory": agent_mem}
+
+    # ── RAG Learning ──
+
+    async def ask_memory(self, question: str) -> Dict:
+        """Ask RAG memory a question — agent learns from past context."""
+        body = {"query": question, "user_id": self.workspace_id}
+        if self.agent_id:
+            body["agent_id"] = self.agent_id
+        return await self._post("/rag/ask", body)
+
+    async def store_run_summary(self, summary: str, run_id: str, agent_id: str = "") -> Dict:
+        """Store run summary as a learning for future runs."""
+        return await self._post("/rag/memories", {
+            "content": f"Run result: {summary}",
+            "user_id": self.workspace_id,
+            "agent_id": agent_id or self.agent_id,
+            "scope": "agent",
+            "type": "run_summary",
+            "metadata": {"run_id": run_id},
+        })
+
+    # ── Hash Sphere Operations ──
+
+    async def create_hash_sphere_anchor(self, content: str, anchor_type: str = "fact") -> Dict:
+        """Create anchor in hash sphere."""
+        return await self._post("/memory/hash-sphere/anchors", {
+            "content": content,
+            "user_id": self.workspace_id,
+            "agent_id": self.agent_id,
+            "type": anchor_type,
+        })
+
+    async def get_hash_sphere_anchors(self) -> Dict:
+        """Get all hash sphere anchors."""
         try:
             async with httpx.AsyncClient(timeout=10.0) as c:
-                r = await c.post(f"{self.base}/user/{self.workspace_id}",
-                                 json={"content": content})
+                r = await c.get(f"{self.base}/memory/hash-sphere/anchors",
+                                params={"user_id": self.workspace_id})
                 if r.status_code == 200:
                     return r.json()
         except Exception as e:
-            logger.warning(f"[Memory] update failed: {e}")
-        return {"status": "stored_locally", "content": content}
+            logger.warning(f"[Memory] get anchors failed: {e}")
+        return {}
+
+    # ── Internal HTTP helper ──
+
+    async def _post(self, path: str, body: Dict) -> Dict:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.post(f"{self.base}{path}", json=body)
+                if r.status_code == 200:
+                    return r.json()
+                logger.warning(f"[Memory] {path} → {r.status_code}")
+        except Exception as e:
+            logger.warning(f"[Memory] {path} failed: {e}")
+        return {}
