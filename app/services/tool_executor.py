@@ -55,6 +55,10 @@ async def execute_tool(
             return await _schedule_agent(arguments, headers, agents_cache)
         elif tool_name == "stop_agent":
             return await _stop_agent(arguments, headers, agents_cache)
+        elif tool_name == "get_agent_sessions":
+            return await _get_agent_sessions(arguments, headers, agents_cache)
+        elif tool_name == "list_platform_tools":
+            return await _list_platform_tools(headers)
         elif tool_name == "respond_to_user":
             # This is handled by the orchestrator loop, not here
             return "respond_to_user is a terminal action — handled by orchestrator."
@@ -303,6 +307,68 @@ async def _schedule_agent(args: dict, headers: dict, agents_cache: list[dict]) -
         label = {3600: "hourly", 86400: "daily", 604800: "weekly"}.get(interval, f"every {interval}s")
         return json.dumps({"success": True, "agent": name, "schedule": label})
     return json.dumps({"error": f"Failed to create schedule for {name}"})
+
+
+async def _get_agent_sessions(args: dict, headers: dict, agents_cache: list[dict]) -> str:
+    """Get recent execution sessions for an agent."""
+    agent_name = args.get("agent_name", "")
+    agent = _find_agent(agent_name, agents_cache)
+    if not agent:
+        return json.dumps({"error": f"Agent '{agent_name}' not found."})
+
+    agent_id = agent["id"]
+    sessions = await fetch_agent_sessions(agent_id, headers, limit=8)
+    if not sessions:
+        return json.dumps({"agent": agent.get("name"), "sessions": [], "message": "No sessions found."})
+
+    result = []
+    for s in sessions:
+        result.append({
+            "id": str(s.get("id", "?"))[:12],
+            "status": s.get("status"),
+            "goal": (s.get("current_goal") or "")[:120],
+            "loops": s.get("loop_count", 0),
+            "tokens": s.get("total_tokens_used", 0),
+            "error": (s.get("error_message") or "")[:200] if s.get("error_message") else None,
+            "created": s.get("created_at"),
+        })
+    return json.dumps({"agent": agent.get("name"), "total_sessions": len(result), "sessions": result})
+
+
+async def _list_platform_tools(headers: dict) -> str:
+    """List all available platform tools from Agent Engine."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+            resp = await c.get(f"{AGENT_ENGINE_URL}/agents/tools/list", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                tools = data if isinstance(data, list) else data.get("tools", [])
+                # Group by category for readability
+                by_cat: dict[str, list[str]] = {}
+                for t in tools:
+                    cat = t.get("category", "other") if isinstance(t, dict) else "other"
+                    name = t.get("name", str(t)) if isinstance(t, dict) else str(t)
+                    by_cat.setdefault(cat, []).append(name)
+                return json.dumps({"total": len(tools), "by_category": by_cat})
+    except Exception as e:
+        logger.warning(f"[TOOL] list_platform_tools failed: {e}")
+
+    # Fallback: return a curated list
+    return json.dumps({"total": "200+", "categories": [
+        "SEARCH: web_search, fetch_url, read_webpage, news_search, reddit_search, youtube_search, deep_research, wikipedia, places_search, image_search",
+        "MEMORY: memory_read, memory_write, memory_search",
+        "CODE: execute_code, code_visualizer_scan, code_visualizer_functions, code_visualizer_trace",
+        "AGENTS: agents_list, agents_create, agents_start, agents_sessions, agents_update, schedule_agent",
+        "MEDIA: generate_image, generate_audio, generate_music",
+        "INTEGRATIONS: gmail_send, gmail_read, slack_send, slack_read, google_calendar, google_drive, figma",
+        "DEVELOPER: execute_code, http_request, external_http_request",
+        "GITHUB: github_create_repo, github_list_repos, github_list_files, github_download_file, github_upload_file, github_pull_request, github_issue",
+        "GIT: git_clone, git_branch, git_push, git_pull",
+        "EMAIL: send_email",
+        "PLATFORM_API: platform_api, discover_services, discover_api",
+        "UTILITIES: weather, stock_crypto, generate_chart, get_current_time",
+        "TOOL_MANAGEMENT: check_tool_exists, auto_build_tool, list_built_tools, execute_built_tool",
+    ]})
 
 
 async def _stop_agent(args: dict, headers: dict, agents_cache: list[dict]) -> str:

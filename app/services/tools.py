@@ -136,7 +136,7 @@ AGENT_TOOLS = [
                     },
                     "changes": {
                         "type": "object",
-                        "description": "Key-value pairs of fields to update. Valid keys: name, description, system_prompt, provider, model, temperature, max_tokens, tools, mode, is_active",
+                        "description": "Key-value pairs of fields to update. Valid keys: name, description, system_prompt, provider, model, temperature, max_tokens, tools, mode, is_active, max_loops (1-100, controls how many iterations the agent can run before stopping), safety_config (JSON with max_loops, allowed_actions, etc.), tool_mode, autonomous",
                     },
                 },
                 "required": ["agent_name", "changes"],
@@ -182,6 +182,35 @@ AGENT_TOOLS = [
                     },
                 },
                 "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_sessions",
+            "description": "Get recent execution sessions for an agent — shows status (completed/failed/running), loop count, tokens used, errors, and goals. Use this to diagnose why an agent failed, check if it's running, or review past performance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent to check sessions for",
+                    },
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_platform_tools",
+            "description": "List all available platform tools that agents can use. Returns tool names organized by category (search, memory, code, media, integrations, etc.). Use when the user asks what tools are available or when you need to recommend tools for an agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
             },
         },
     },

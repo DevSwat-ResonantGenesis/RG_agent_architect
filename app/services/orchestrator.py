@@ -24,7 +24,7 @@ from .tool_executor import execute_tool
 logger = logging.getLogger(__name__)
 
 PANEL_URL = "/agents?embed=1"
-MAX_TOOL_ITERATIONS = 6  # Safety limit on ReAct loop
+MAX_TOOL_ITERATIONS = 10  # Safety limit on ReAct loop
 
 
 # ═══════════════════════════════════════════════════════════════

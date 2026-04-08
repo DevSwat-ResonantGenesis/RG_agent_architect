@@ -340,6 +340,7 @@ CURRENT AGENT CONFIG:
 - Tools: {agent_tools}
 - Mode: {agent_mode}
 - Is Active: {agent_active}
+- Safety Config: {agent_safety_config}
 
 USER REQUEST: {message}
 
@@ -350,7 +351,8 @@ Respond with ONLY valid JSON:
   "unchanged": "What stays the same"
 }}
 
-Valid fields: name, description, system_prompt, provider, model, temperature, max_tokens, tools, mode, is_active, safety_config, allowed_actions, blocked_actions
+Valid fields: name, description, system_prompt, provider, model, temperature, max_tokens, tools, mode, is_active, safety_config, allowed_actions, blocked_actions, max_loops, tool_mode, autonomous
+IMPORTANT: max_loops (integer 1-100) controls how many iterations the agent can run before stopping. Default is 25. If user mentions loop limit, iterations, or "Maximum loop iterations reached", set max_loops to a higher value (e.g. 40-50).
 Only include fields that should change."""
 
 # ═══════════════════════════════════════════════════════════════
@@ -487,11 +489,48 @@ Only extract EXPLICIT facts stated in the message. Do not infer or guess. Respon
 # SYSTEM PROMPT BUILDER — assembles full orchestrator prompt
 # ═══════════════════════════════════════════════════════════════
 
+PLATFORM_PROMPT = """<platform_capabilities>
+You have direct access to the ResonantGenesis Agent Engine platform via function-calling tools. Use them proactively.
+
+AGENT MANAGEMENT:
+- list_agents — See all agents with status, model, tools
+- get_agent_details — Deep inspect: config, recent sessions, errors
+- get_agent_sessions — See execution history: status, loops, tokens, errors for each run
+- create_agent — Build new agents with full config
+- modify_agent — Update ANY field: name, description, system_prompt, provider, model, temperature, max_tokens, tools, mode, is_active, max_loops, safety_config, tool_mode, autonomous
+- delete_agent — Remove agents
+- run_agent — Execute immediately
+- schedule_agent — Set up recurring runs
+- stop_agent — Deactivate
+- list_platform_tools — See all 200+ available tools by category
+
+EXECUTION CONFIG:
+- Agents have a configurable max_loops (1-100) that controls how many iterations they can run. Default is 25.
+- If an agent hits "Maximum loop iterations reached", increase max_loops via modify_agent: {"max_loops": 40}
+- Complex tasks (multi-step research, scraping) often need 30-50 loops. Simple tasks need 10-15.
+- max_loops is stored in safety_config and can be set directly via the modify_agent changes object.
+
+WHEN DIAGNOSING FAILURES:
+1. ALWAYS call get_agent_sessions first to see what actually happened
+2. Check the error message — "Maximum loop iterations reached" means increase max_loops
+3. Check loop count vs goal complexity — was the agent given enough iterations?
+4. Look at token usage — high tokens with low loops means expensive steps
+5. Propose concrete fixes, don't just describe the problem
+
+WHEN MODIFYING AGENTS:
+- You can change ANY config field via modify_agent
+- To increase loop limit: modify_agent(agent_name="X", changes={"max_loops": 40})
+- To change model: modify_agent(agent_name="X", changes={"model": "gpt-4o", "provider": "openai"})
+- To add tools: modify_agent(agent_name="X", changes={"tools": ["web_search", "fetch_url", "memory_write"]})
+- Multiple changes in one call: modify_agent(agent_name="X", changes={"max_loops": 40, "model": "gpt-4o", "tools": [...]})
+</platform_capabilities>"""
+
 def build_system_prompt() -> str:
     """Assemble the full orchestrator system prompt from all sections."""
     return "\n".join([
         IDENTITY_PROMPT,
         SYSTEM_PROMPT,
+        PLATFORM_PROMPT,
         MODES_PROMPT,
         LIFECYCLE_PROMPT,
         STYLE_PROMPT,
