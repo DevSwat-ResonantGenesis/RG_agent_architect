@@ -16,6 +16,7 @@ import httpx
 
 from ..config import settings
 from .runner import run_agent_full, fetch_agent_sessions, create_schedule
+from .goal_crafter import craft_goal, format_scope_warning, ScopeRisk
 
 logger = logging.getLogger(__name__)
 
@@ -276,31 +277,67 @@ async def _query_cross_agent_database(args: dict, headers: dict, cache: list) ->
 # ═══════════════════════════════════════════════════════════════
 
 async def _create_agent(args: dict, headers: dict, cache: list) -> str:
+    """Twin dispatching: Create → build_agent(name, goal, icon).
+
+    Integrates 8-step goal crafting pipeline:
+    1. Craft goal (strip recurrence, strip secrets, identify services)
+    2. Check scope risk → return warning if HIGH/MODERATE
+    3. Generate builder instruction template
+    4. Apply task profile for model/loops/temperature
+    5. Create agent via Agent Engine API
+    """
     budget = args.get("budget") or {}
-    max_loops = args.get("max_loops", 30)
+    raw_goal = args.get("goal", "")
+    name = args.get("name", "New Agent")
+    tools = args.get("tools", [])
+
+    # Step 1-7: Goal crafting pipeline
+    crafted = craft_goal(raw_goal, tools)
+
+    # If scope risk detected, return warning (LLM should present_options)
+    if crafted.risk_level != ScopeRisk.SAFE:
+        warning = format_scope_warning(crafted)
+        return json.dumps({
+            "scope_warning": warning,
+            "crafted_goal": crafted.goal_text,
+            "services": crafted.services,
+            "schedule": crafted.schedule,
+            "assumptions": crafted.assumptions,
+            "action_required": "present scope warning to user before proceeding",
+        })
+
+    # Builder instruction template (twin-platform builder.py pattern)
     system_prompt = args.get("system_prompt")
     if not system_prompt or len(system_prompt) < 50:
-        name = args.get("name", "Agent")
-        goal = args.get("goal", "")
-        tools = args.get("tools", [])
         system_prompt = (
-            f"You are {name}, an autonomous agent.\n\n"
-            f"YOUR GOAL: {goal}\n\n"
-            f"INSTRUCTIONS:\n"
-            f"1. Use your tools ({', '.join(tools)}) to accomplish the goal.\n"
-            f"2. Break the task into steps and execute one by one.\n"
-            f"3. Store final results using Memory Store.\n"
-            f"4. Do NOT hallucinate — only report tool results.\n"
+            f"You are {name}, an autonomous agent.\n"
+            f"Goal: {crafted.goal_text}\n\n"
+            f"INSTRUCTIONS (follow these steps exactly):\n"
+            f"Step 1: Analyze goal, identify data sources and required tools.\n"
+            f"Step 2: Gather data using your tools ({', '.join(tools)}).\n"
+            f"Step 3: Process, filter, and validate results.\n"
+            f"Step 4: Format output and store in database.\n\n"
+            f"CONSTRAINTS:\n"
+            f"- Maximum 50 results unless specified\n"
+            f"- Include source URLs for all data\n"
+            f"- Do NOT hallucinate — only report verified tool results\n"
+            f"- Store final results using Memory Store\n"
         )
+
+    # Apply task profile based on complexity
+    profile = settings.TASK_PROFILES.get("medium", {})
+    max_loops = args.get("max_loops") or profile.get("max_loops", 30)
+    temperature = args.get("temperature") or profile.get("temperature", 0.6)
+
     payload = {
-        "name": args.get("name", "New Agent"),
+        "name": name,
         "description": args.get("description", ""),
         "system_prompt": system_prompt,
-        "goal": args.get("goal", ""),
+        "goal": crafted.goal_text,
         "provider": args.get("provider", "groq"),
         "model": args.get("model", "llama-3.3-70b-versatile"),
-        "tools": args.get("tools", []),
-        "temperature": args.get("temperature", 0.6),
+        "tools": tools,
+        "temperature": temperature,
         "max_tokens": 4096,
         "mode": args.get("mode", "governed"),
         "is_active": True,
@@ -313,7 +350,12 @@ async def _create_agent(args: dict, headers: dict, cache: list) -> str:
             resp = await c.post(f"{AGENT_ENGINE_URL}/agents/", headers={**headers, "Content-Type": "application/json"}, json=payload)
             if resp.status_code in (200, 201):
                 data = resp.json()
-                result = {"success": True, "id": data.get("id"), "name": data.get("name"), "model": data.get("model"), "tools": data.get("tools", [])}
+                result: dict = {"success": True, "id": data.get("id"), "name": data.get("name"), "model": data.get("model"), "tools": data.get("tools", [])}
+                if crafted.schedule:
+                    result["detected_schedule"] = crafted.schedule
+                    result["note"] = "Schedule detected — call schedule_agent after build completes"
+                if crafted.assumptions:
+                    result["assumptions"] = crafted.assumptions
                 if data.get("id") and budget.get("initial_credits"):
                     await _create_wallet(data["id"], budget["initial_credits"], headers)
                     result["initial_credits"] = budget["initial_credits"]

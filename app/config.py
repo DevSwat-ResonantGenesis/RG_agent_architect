@@ -37,6 +37,23 @@ class Settings:
     ORCHESTRATOR_HISTORY_DEPTH: int = 10
     ORCHESTRATOR_MSG_TRUNCATE: int = 2000
 
+    # ── Task Profiles (twin-platform config) ──
+    # Determines model, loops, temperature, budget per task complexity
+    TASK_PROFILES: dict = {
+        "simple":   {"max_loops": 20, "temperature": 0.4, "model": "llama-3.3-70b-versatile", "max_tokens": 30000, "max_credits": 50},
+        "medium":   {"max_loops": 35, "temperature": 0.55, "model": "llama-3.3-70b-versatile", "max_tokens": 50000, "max_credits": 100},
+        "complex":  {"max_loops": 45, "temperature": 0.65, "model": "gpt-4o", "max_tokens": 80000, "max_credits": 200},
+        "creative": {"max_loops": 25, "temperature": 0.75, "model": "llama-3.3-70b-versatile", "max_tokens": 50000, "max_credits": 100},
+    }
+
+    # ── Billing Plans (twin-platform config) ──
+    PLANS: dict = {
+        "free":  {"price": 0,    "credits": 2200,   "email_limit": 50},
+        "plus":  {"price": 20,   "credits": 2000,   "email_limit": 100},
+        "pro":   {"price": 200,  "credits": 20000,  "email_limit": 1000},
+        "max":   {"price": 1000, "credits": 100000, "email_limit": 5000},
+    }
+
     def groq_keys(self) -> list[str]:
         """Return all valid Groq API keys (supports comma-separated)."""
         keys = []

@@ -18,6 +18,7 @@ from .context import fetch_workspace_context, build_context_summary
 from .llm_client import call_llm
 from .tools import AGENT_TOOLS
 from .tool_executor import execute_tool
+from .mode_classifier import classify_mode
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,13 @@ async def orchestrate(
     agents = workspace_ctx.get("agents", [])
     context_summary = build_context_summary(workspace_ctx)
 
+    # Step 1b: Mode classification (twin.md lines 369-373)
+    mode = classify_mode(message, agents_exist=len(agents) > 0)
+    logger.info(f"[ORCH] Mode: {mode.value} | Agents: {len(agents)}")
+
     # Step 2: Build messages
     system_prompt = build_system_prompt()
-    system_msg = f"{system_prompt}\n\n<workspace_context>\n{context_summary}\n</workspace_context>"
+    system_msg = f"{system_prompt}\n\n<workspace_context>\n{context_summary}\n</workspace_context>\n\n<current_mode>{mode.value}</current_mode>"
 
     # Include conversation history if provided
     history = context.get("history", [])[-settings.ORCHESTRATOR_HISTORY_DEPTH:]
@@ -61,7 +66,7 @@ async def orchestrate(
     # Step 3: ReAct loop
     final_response = ""
     options = []
-    metadata: dict = {"tools_called": [], "iterations": 0}
+    metadata: dict = {"tools_called": [], "iterations": 0, "mode": mode.value}
 
     for iteration in range(settings.ORCHESTRATOR_MAX_ITERATIONS):
         metadata["iterations"] = iteration + 1
@@ -140,7 +145,7 @@ async def orchestrate(
     if not final_response:
         final_response = "I've completed the requested actions."
 
-    return {"response": final_response, "options": options, "metadata": metadata}
+    return {"response": final_response, "options": options, "mode": mode.value, "metadata": metadata}
 
 
 async def orchestrate_stream(
