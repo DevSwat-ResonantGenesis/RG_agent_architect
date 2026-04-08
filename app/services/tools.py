@@ -549,4 +549,243 @@ AGENT_TOOLS = [
             },
         },
     },
+    # ── TWIN ARCHITECTURE TOOLS — Full parity with Twin's 21 orchestrator tools ──
+    {
+        "type": "function",
+        "function": {
+            "name": "continue_build",
+            "description": "Modify or extend an existing agent by sending rebuild instructions to the builder. Use when the user wants to change what an agent does, add tools, fix issues, or improve instructions. Instructions must be a THREE-PART DELTA: what CHANGES, what STAYS, what STOPS.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent to rebuild/modify",
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "description": "Rebuild instructions as a 3-part delta:\n1. What CHANGES now (new behavior, tools, goal)\n2. What STAYS THE SAME (preserve existing functionality)\n3. What STOPS happening (remove old behavior)",
+                    },
+                },
+                "required": ["agent_name", "instructions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "message_build",
+            "description": "Send guidance to an agent's active build session. Use when a build is in progress and you need to provide additional context, answer the builder's question, or redirect the build. The message is queued and processed when the builder is ready.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent with active build",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Guidance message for the builder",
+                    },
+                },
+                "required": ["agent_name", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_workspace_name",
+            "description": "Set or rename the user's workspace. Call proactively when creating the first agent if the workspace has a default name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "New workspace name (e.g. 'Sales Ops', 'Content Machine')",
+                    },
+                    "icon": {
+                        "type": "string",
+                        "description": "Emoji icon for the workspace",
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_interface_editor",
+            "description": "Launch the interface editor to build a shareable React app + API on top of an agent's SQLite database. The agent becomes the backend; the interface is the product. Suggest after successful build + trigger configured.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent to build an interface for",
+                    },
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_workspace_databases",
+            "description": "List all agent SQLite databases in the workspace. Shows which agents have persistent data that can be queried. Use before query_cross_agent_database.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_cross_agent_database",
+            "description": "Execute a read-only SQL query against an agent's SQLite database. SELECT only — no INSERT/UPDATE/DELETE. Use to inspect agent data, cross-reference between agents, or answer questions about what agents have collected.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent whose database to query",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "SQL SELECT query to execute",
+                    },
+                },
+                "required": ["agent_name", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "configure_smtp",
+            "description": "Set up a custom SMTP email server for the user. Removes rate limits and Twin branding from sent emails. Collect ALL fields via present_options with Secret type for password BEFORE calling this.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "description": "SMTP server hostname (e.g. smtp.gmail.com)",
+                    },
+                    "port": {
+                        "type": "integer",
+                        "description": "SMTP port (587 for TLS, 465 for SSL)",
+                    },
+                    "username": {
+                        "type": "string",
+                        "description": "SMTP username/email",
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "SMTP password (collected via Secret input type)",
+                    },
+                    "from_email": {
+                        "type": "string",
+                        "description": "From email address",
+                    },
+                    "from_name": {
+                        "type": "string",
+                        "description": "From display name",
+                    },
+                    "use_tls": {
+                        "type": "boolean",
+                        "description": "Use TLS encryption. Default: true",
+                    },
+                },
+                "required": ["host", "port", "username", "password", "from_email"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_smtp",
+            "description": "Remove custom SMTP configuration and revert to default email sending.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_operation",
+            "description": "Perform file operations in the workspace: read, write, download_via_curl, upload_via_curl, extract_zip, or list files. Agents use this for data processing, report generation, and file management.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["read", "write", "download_via_curl", "upload_via_curl", "extract_zip", "list"],
+                        "description": "File operation to perform",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Bare filename (no paths). Required for read/write/download/upload/extract.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write (for write action)",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "URL for download/upload operations",
+                    },
+                    "curl_args": {
+                        "type": "string",
+                        "description": "Additional curl flags for download/upload",
+                    },
+                    "encoding": {
+                        "type": "string",
+                        "enum": ["text", "base64"],
+                        "description": "Encoding for write: text (default) or base64 for binary",
+                    },
+                    "offset_chars": {
+                        "type": "integer",
+                        "description": "Character offset for paging large files (read action)",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Max characters to return (read action)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "present_billing_offer",
+            "description": "Present a billing/upgrade offer to the user when they're running low on credits or need more capacity. Shows plan comparison and upgrade options.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the offer is being shown (e.g. 'low_credits', 'plan_limit', 'feature_gated')",
+                    },
+                    "current_plan": {
+                        "type": "string",
+                        "description": "User's current plan",
+                    },
+                    "recommended_plan": {
+                        "type": "string",
+                        "description": "Recommended upgrade plan",
+                    },
+                },
+                "required": ["reason"],
+            },
+        },
+    },
 ]

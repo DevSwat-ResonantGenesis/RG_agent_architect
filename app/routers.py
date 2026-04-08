@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from .services.orchestrator import orchestrate, orchestrate_stream
 from .services.health_monitor import run_health_check, check_agent_after_run
+from .services.run_events import process_run_event, get_pending_events
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,21 @@ class HealthCheckRequest(BaseModel):
 class RunCompleteWebhook(BaseModel):
     agent_id: str
     session_status: str
+
+
+class RunEventRequest(BaseModel):
+    agent_id: str
+    agent_name: str = ""
+    session_id: str = ""
+    event_type: str = ""
+    status: str = ""
+    is_build: bool = False
+    summary: str = ""
+    error: str = ""
+    output: Any = None
+    tool_calls: list = []
+    has_trigger: bool = False
+    user_id: str = ""
 
 
 # ── Endpoints ──
@@ -125,6 +141,64 @@ async def run_complete_webhook(req: RunCompleteWebhook, request: Request):
         headers=headers,
     )
     return {"checked": True, "fix_applied": result}
+
+
+@router.post("/run-event")
+async def run_event_webhook(req: RunEventRequest, request: Request):
+    """Webhook called by Agent Engine when a build or run completes.
+    
+    Twin's Run Event Processing (twin.md Section 6):
+    - Classifies event type (build/run × success/partial/fail/stopped)
+    - Generates follow-up options per Twin's decision tree
+    - Forwards to chat service for real-time user notification
+    - Stores for SSE polling
+    """
+    headers = _extract_headers(request)
+    if not headers.get("x-user-id") and req.user_id:
+        headers["x-user-id"] = req.user_id
+
+    result = await process_run_event(req.model_dump(), headers)
+    return result
+
+
+@router.get("/events/{user_id}")
+async def get_user_events(user_id: str):
+    """Get pending run events for a user (for SSE polling).
+    Returns and clears any queued events."""
+    events = get_pending_events(user_id)
+    return {"events": events, "count": len(events)}
+
+
+@router.get("/events/{user_id}/stream")
+async def stream_user_events(user_id: str):
+    """SSE stream of run events for a user. Long-poll style — returns
+    events as they arrive, keeps connection open."""
+    import asyncio
+    import json
+
+    async def event_generator():
+        # Send initial keepalive
+        yield f"data: {json.dumps({'type': 'connected', 'user_id': user_id})}\n\n"
+        
+        # Poll for events every 2 seconds, up to 30 seconds
+        for _ in range(15):
+            events = get_pending_events(user_id)
+            for event in events:
+                yield f"data: {json.dumps(event)}\n\n"
+            await asyncio.sleep(2)
+        
+        # Send keepalive before closing
+        yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/health")

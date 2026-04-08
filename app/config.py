@@ -8,6 +8,7 @@ class Settings:
     # Downstream services (Docker network names)
     AGENT_ENGINE_URL: str = os.getenv("AGENT_ENGINE_URL", "http://agent_engine_service:8000")
     MEMORY_SERVICE_URL: str = os.getenv("MEMORY_SERVICE_URL", "http://memory_service:8000")
+    CHAT_SERVICE_URL: str = os.getenv("CHAT_SERVICE_URL", "http://chat_service:8000")
 
     # LLM API keys
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
