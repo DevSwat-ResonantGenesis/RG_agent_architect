@@ -70,6 +70,8 @@ async def _call_direct(messages, tools, model, temperature, max_tokens) -> Dict[
             resp = await client.post(
                 url, json=body,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+            if resp.status_code != 200:
+                logger.error(f"[LLM] direct {resp.status_code}: {resp.text[:500]}")
             resp.raise_for_status()
             return resp.json()
     except Exception as e:
