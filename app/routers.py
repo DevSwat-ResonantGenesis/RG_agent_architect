@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from .services.orchestrator import orchestrate
+from .services.health_monitor import run_health_check, check_agent_after_run
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,15 @@ class OrchestrateRequest(BaseModel):
 class ClassifyRequest(BaseModel):
     message: str
     user_api_keys: dict[str, str] = {}
+
+
+class HealthCheckRequest(BaseModel):
+    auto_fix: bool = False
+
+
+class RunCompleteWebhook(BaseModel):
+    agent_id: str
+    session_status: str
 
 
 # ── Endpoints ──
@@ -56,6 +66,31 @@ async def classify_intent_endpoint(req: ClassifyRequest):
     from .services.orchestrator import _classify_intent
     intent = await _classify_intent(req.message, req.user_api_keys)
     return {"intent": intent, "message": req.message[:200]}
+
+
+@router.post("/health-check")
+async def health_check_endpoint(req: HealthCheckRequest, request: Request):
+    """Run proactive health check across all user agents.
+    Detects consecutive failures, stuck sessions, depleted budgets.
+    Pass auto_fix=true to automatically apply recommended fixes.
+    """
+    headers = _extract_headers(request)
+    result = await run_health_check(headers=headers, auto_fix=req.auto_fix)
+    return result
+
+
+@router.post("/run-complete")
+async def run_complete_webhook(req: RunCompleteWebhook, request: Request):
+    """Webhook called after each agent run completes.
+    Triggers lightweight post-run health check with auto-fix.
+    """
+    headers = _extract_headers(request)
+    result = await check_agent_after_run(
+        agent_id=req.agent_id,
+        session_status=req.session_status,
+        headers=headers,
+    )
+    return {"checked": True, "fix_applied": result}
 
 
 @router.get("/health")

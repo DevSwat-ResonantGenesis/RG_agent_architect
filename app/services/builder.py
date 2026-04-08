@@ -166,6 +166,15 @@ async def create_agents_from_blueprint(
             system_prompt = build_agent_system_prompt(name, hint, tools)
             safety = build_safety_config(tools, mode)
 
+            # Budget config
+            budget = bp.get("budget") or {}
+            budget_config = {}
+            if budget:
+                budget_config = {
+                    "max_tokens_per_run": budget.get("max_tokens_per_run", 50000),
+                    "max_runs_per_day": budget.get("max_runs_per_day", 10),
+                }
+
             payload = {
                 "name": name,
                 "description": desc,
@@ -180,6 +189,8 @@ async def create_agents_from_blueprint(
                 "allowed_actions": tools,
                 "blocked_actions": ["delete_community", "delete_user", "admin_override"],
             }
+            if budget_config:
+                payload["budget_config"] = budget_config
 
             result = await create_single_agent(client, payload, headers)
             if not result:
@@ -205,6 +216,33 @@ async def create_agents_from_blueprint(
                         lines.append(f"   ⚠️ Goal: status {goal_resp.status_code}")
                 except Exception as e:
                     logger.warning(f"[BUILDER] Goal assign failed for {name}: {e}")
+
+            # Create wallet with initial credits
+            initial_credits = budget.get("initial_credits", 0) if budget else 0
+            if initial_credits and agent_id:
+                try:
+                    wallet_resp = await client.post(
+                        f"{settings.AGENT_ENGINE_URL}/wallets/agent/{agent_id}",
+                        headers={**headers, "Content-Type": "application/json"},
+                        json={"initial_balance": initial_credits, "currency": "credits"},
+                    )
+                    if wallet_resp.status_code in (200, 201):
+                        lines.append(f"   💰 {initial_credits} credits allocated")
+                    else:
+                        # Fallback: try credit deposit
+                        dep_resp = await client.post(
+                            f"{settings.AGENT_ENGINE_URL}/credits/deposit",
+                            headers={**headers, "Content-Type": "application/json"},
+                            json={"agent_id": agent_id, "amount": initial_credits, "reason": "Initial allocation by Architect"},
+                        )
+                        if dep_resp.status_code in (200, 201):
+                            lines.append(f"   💰 {initial_credits} credits allocated")
+                except Exception as e:
+                    logger.warning(f"[BUILDER] Wallet creation failed for {name}: {e}")
+
+            # Budget config line
+            if budget_config:
+                lines.append(f"   📊 Budget: {budget_config.get('max_tokens_per_run', '?')} tokens/run, {budget_config.get('max_runs_per_day', '?')} runs/day")
 
             # Create schedule
             schedule = bp.get("schedule")

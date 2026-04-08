@@ -59,6 +59,18 @@ async def execute_tool(
             return await _get_agent_sessions(arguments, headers, agents_cache)
         elif tool_name == "list_platform_tools":
             return await _list_platform_tools(headers)
+        elif tool_name == "set_agent_budget":
+            return await _set_agent_budget(arguments, headers, agents_cache)
+        elif tool_name == "check_agent_wallet":
+            return await _check_agent_wallet(arguments, headers, agents_cache)
+        elif tool_name == "auto_build_tool":
+            return await _auto_build_tool(arguments, headers)
+        elif tool_name == "check_tool_exists":
+            return await _check_tool_exists(arguments, headers)
+        elif tool_name == "execute_built_tool":
+            return await _execute_built_tool(arguments, headers)
+        elif tool_name == "health_check_agents":
+            return await _health_check_agents(arguments, headers, agents_cache)
         elif tool_name == "respond_to_user":
             # This is handled by the orchestrator loop, not here
             return "respond_to_user is a terminal action — handled by orchestrator."
@@ -193,6 +205,7 @@ async def _delete_agent(args: dict, headers: dict, agents_cache: list[dict]) -> 
 
 async def _create_agent(args: dict, headers: dict) -> str:
     """Create a new agent via Agent Engine API."""
+    budget = args.get("budget") or {}
     payload = {
         "name": args.get("name", "New Agent"),
         "description": args.get("description", ""),
@@ -206,6 +219,11 @@ async def _create_agent(args: dict, headers: dict) -> str:
         "mode": args.get("mode", "governed"),
         "is_active": True,
     }
+    if budget:
+        payload["budget_config"] = {
+            "max_tokens_per_run": budget.get("max_tokens_per_run", 50000),
+            "max_runs_per_day": budget.get("max_runs_per_day", 10),
+        }
 
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as c:
@@ -217,13 +235,22 @@ async def _create_agent(args: dict, headers: dict) -> str:
             print(f"[TOOL_EXEC] POST /agents/ → {resp.status_code}", flush=True)
             if resp.status_code in (200, 201):
                 data = resp.json()
-                return json.dumps({
+                agent_id = data.get("id")
+                result_info = {
                     "success": True,
-                    "id": data.get("id"),
+                    "id": agent_id,
                     "name": data.get("name"),
                     "model": data.get("model"),
                     "tools": data.get("tools", []),
-                })
+                }
+                # Create wallet with initial credits if budget specified
+                if agent_id and budget.get("initial_credits"):
+                    wallet_ok = await _create_agent_wallet(
+                        agent_id, budget["initial_credits"], headers
+                    )
+                    result_info["wallet_created"] = wallet_ok
+                    result_info["initial_credits"] = budget.get("initial_credits")
+                return json.dumps(result_info)
             else:
                 return json.dumps({"error": f"Create failed ({resp.status_code}): {resp.text[:200]}"})
     except Exception as e:
@@ -369,6 +396,339 @@ async def _list_platform_tools(headers: dict) -> str:
         "UTILITIES: weather, stock_crypto, generate_chart, get_current_time",
         "TOOL_MANAGEMENT: check_tool_exists, auto_build_tool, list_built_tools, execute_built_tool",
     ]})
+
+
+# ═══════════════════════════════════════════════════════════════
+# BUDGET & WALLET TOOLS
+# ═══════════════════════════════════════════════════════════════
+
+async def _create_agent_wallet(
+    agent_id: str, initial_credits: float, headers: dict
+) -> bool:
+    """Create a wallet for an agent with initial credit allocation."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+            resp = await c.post(
+                f"{AGENT_ENGINE_URL}/wallets/agent/{agent_id}",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"initial_balance": initial_credits, "currency": "credits"},
+            )
+            if resp.status_code in (200, 201):
+                logger.info(f"[TOOL] Wallet created for {agent_id} with {initial_credits} credits")
+                return True
+            # Fallback: try credit deposit endpoint
+            resp2 = await c.post(
+                f"{AGENT_ENGINE_URL}/credits/deposit",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"agent_id": agent_id, "amount": initial_credits, "reason": "Initial allocation by Architect"},
+            )
+            return resp2.status_code in (200, 201)
+    except Exception as e:
+        logger.warning(f"[TOOL] Wallet creation failed for {agent_id}: {e}")
+        return False
+
+
+async def _set_agent_budget(args: dict, headers: dict, agents_cache: list[dict]) -> str:
+    """Set budget limits for an agent."""
+    agent_name = args.get("agent_name", "")
+    agent = _find_agent(agent_name, agents_cache)
+    if not agent:
+        return json.dumps({"error": f"Agent '{agent_name}' not found."})
+
+    agent_id = agent["id"]
+    name = agent.get("name", agent_name)
+    changes: dict = {}
+
+    max_tokens = args.get("max_tokens_per_run")
+    max_runs = args.get("max_runs_per_day")
+    credits_amount = args.get("credits")
+
+    if max_tokens or max_runs:
+        budget_config = {}
+        if max_tokens:
+            budget_config["max_tokens_per_run"] = max_tokens
+        if max_runs:
+            budget_config["max_runs_per_day"] = max_runs
+        changes["budget_config"] = budget_config
+
+    # Apply config changes via PATCH
+    result: dict = {"agent": name}
+    if changes:
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+                resp = await c.patch(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json=changes,
+                )
+                result["budget_updated"] = resp.status_code in (200, 204)
+                result["budget_config"] = changes.get("budget_config")
+        except Exception as e:
+            result["budget_error"] = str(e)
+
+    # Deposit credits if requested
+    if credits_amount:
+        wallet_ok = await _create_agent_wallet(agent_id, credits_amount, headers)
+        result["credits_deposited"] = wallet_ok
+        result["credits_amount"] = credits_amount
+
+    return json.dumps(result)
+
+
+async def _check_agent_wallet(args: dict, headers: dict, agents_cache: list[dict]) -> str:
+    """Check an agent's wallet balance and recent transactions."""
+    agent_name = args.get("agent_name", "")
+    agent = _find_agent(agent_name, agents_cache)
+    if not agent:
+        return json.dumps({"error": f"Agent '{agent_name}' not found."})
+
+    agent_id = agent["id"]
+    name = agent.get("name", agent_name)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+            # Try wallet endpoint
+            resp = await c.get(
+                f"{AGENT_ENGINE_URL}/wallets/agent/{agent_id}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return json.dumps({
+                    "agent": name,
+                    "balance": data.get("balance", 0),
+                    "currency": data.get("currency", "credits"),
+                    "total_spent": data.get("total_spent", 0),
+                    "transactions": data.get("recent_transactions", [])[:5],
+                })
+
+            # Fallback: try credits endpoint
+            resp2 = await c.get(
+                f"{AGENT_ENGINE_URL}/credits/agent/{agent_id}",
+                headers=headers,
+            )
+            if resp2.status_code == 200:
+                data = resp2.json()
+                return json.dumps({"agent": name, **data})
+
+            return json.dumps({"agent": name, "wallet": "not_found", "message": "No wallet exists for this agent yet. Use set_agent_budget to create one."})
+    except Exception as e:
+        return json.dumps({"error": f"Wallet check failed: {e}"})
+
+
+# ═══════════════════════════════════════════════════════════════
+# SELF-EXTENSION TOOLS (auto_build_tool, check_tool_exists, execute_built_tool)
+# ═══════════════════════════════════════════════════════════════
+
+async def _auto_build_tool(args: dict, headers: dict) -> str:
+    """Create a new tool dynamically via Agent Engine's tool builder."""
+    tool_name = args.get("tool_name", "")
+    description = args.get("description", "")
+    input_schema = args.get("input_schema", {})
+    hint = args.get("implementation_hint", "")
+
+    if not tool_name or not description:
+        return json.dumps({"error": "tool_name and description are required."})
+
+    payload = {
+        "name": tool_name,
+        "description": description,
+        "input_schema": input_schema,
+        "implementation_hint": hint,
+        "source": "agent_architect",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+            resp = await c.post(
+                f"{AGENT_ENGINE_URL}/agents/tools/execute",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"tool_name": "auto_build_tool", "tool_input": payload},
+            )
+            print(f"[TOOL_EXEC] auto_build_tool → {resp.status_code}", flush=True)
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return json.dumps({
+                    "success": True,
+                    "tool_name": tool_name,
+                    "message": f"Tool '{tool_name}' created and registered.",
+                    "details": data,
+                })
+            else:
+                return json.dumps({"error": f"auto_build_tool failed ({resp.status_code}): {resp.text[:300]}"})
+    except Exception as e:
+        return json.dumps({"error": f"auto_build_tool failed: {e}"})
+
+
+async def _check_tool_exists(args: dict, headers: dict) -> str:
+    """Check if a tool exists on the platform."""
+    tool_name = args.get("tool_name", "")
+    if not tool_name:
+        return json.dumps({"error": "tool_name is required."})
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+            resp = await c.post(
+                f"{AGENT_ENGINE_URL}/agents/tools/execute",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"tool_name": "check_tool_exists", "tool_input": {"tool_name": tool_name}},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return json.dumps(data)
+            # Fallback: search tools list
+            resp2 = await c.get(f"{AGENT_ENGINE_URL}/agents/tools/list", headers=headers)
+            if resp2.status_code == 200:
+                tools = resp2.json()
+                tool_list = tools if isinstance(tools, list) else tools.get("tools", [])
+                found = any(
+                    (t.get("name", "") if isinstance(t, dict) else str(t)) == tool_name
+                    for t in tool_list
+                )
+                return json.dumps({"tool_name": tool_name, "exists": found})
+    except Exception as e:
+        return json.dumps({"error": f"check_tool_exists failed: {e}"})
+
+    return json.dumps({"tool_name": tool_name, "exists": False, "message": "Could not verify. Try auto_build_tool to create it."})
+
+
+async def _execute_built_tool(args: dict, headers: dict) -> str:
+    """Execute a dynamically-built tool."""
+    tool_name = args.get("tool_name", "")
+    inputs = args.get("inputs", {})
+    if not tool_name:
+        return json.dumps({"error": "tool_name is required."})
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+            resp = await c.post(
+                f"{AGENT_ENGINE_URL}/agents/tools/execute",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"tool_name": tool_name, "tool_input": inputs},
+            )
+            if resp.status_code == 200:
+                return json.dumps({"success": True, "tool": tool_name, "result": resp.json()})
+            return json.dumps({"error": f"Execute failed ({resp.status_code}): {resp.text[:300]}"})
+    except Exception as e:
+        return json.dumps({"error": f"execute_built_tool failed: {e}"})
+
+
+# ═══════════════════════════════════════════════════════════════
+# HEALTH CHECK & PROACTIVE FAILURE RECOVERY
+# ═══════════════════════════════════════════════════════════════
+
+async def _health_check_agents(
+    args: dict, headers: dict, agents_cache: list[dict]
+) -> str:
+    """Scan all agents for health issues and optionally auto-fix."""
+    auto_fix = args.get("auto_fix", False)
+
+    # Refresh agent list
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            r = await c.get(f"{AGENT_ENGINE_URL}/agents/", headers=headers)
+            if r.status_code == 200:
+                data = r.json()
+                agents = data if isinstance(data, list) else data.get("agents", [])
+            else:
+                agents = agents_cache
+    except Exception:
+        agents = agents_cache
+
+    if not agents:
+        return json.dumps({"message": "No agents to check.", "issues": []})
+
+    issues: list[dict] = []
+    fixes_applied: list[dict] = []
+
+    for agent in agents[:20]:
+        agent_id = agent.get("id")
+        name = agent.get("name", "?")
+        if not agent_id:
+            continue
+
+        # Fetch recent sessions
+        sessions = await fetch_agent_sessions(agent_id, headers, limit=5)
+        if not sessions:
+            continue
+
+        # Check: consecutive failures
+        consecutive_fails = 0
+        last_error = ""
+        for s in sessions:
+            if s.get("status") == "failed":
+                consecutive_fails += 1
+                if not last_error:
+                    last_error = (s.get("error_message") or "")[:200]
+            else:
+                break
+
+        if consecutive_fails >= 2:
+            issue = {
+                "agent": name,
+                "agent_id": agent_id,
+                "issue": "consecutive_failures",
+                "count": consecutive_fails,
+                "last_error": last_error,
+            }
+
+            # Determine fix
+            fix_action = None
+            if "Maximum loop iterations reached" in last_error:
+                fix_action = {"change": "max_loops", "from": 25, "to": 50}
+            elif "timeout" in last_error.lower():
+                fix_action = {"change": "timeout_seconds", "from": 300, "to": 600}
+            elif "rate_limit" in last_error.lower() or "429" in last_error:
+                fix_action = {"change": "model", "to": "llama-3.3-70b-versatile", "reason": "rate limit — switch provider"}
+
+            if fix_action:
+                issue["recommended_fix"] = fix_action
+
+                if auto_fix and fix_action.get("change"):
+                    changes = {}
+                    if fix_action["change"] == "max_loops":
+                        changes = {"safety_config": {"max_loops": fix_action["to"]}}
+                    elif fix_action["change"] == "timeout_seconds":
+                        changes = {"safety_config": {"timeout_seconds": fix_action["to"]}}
+                    elif fix_action["change"] == "model":
+                        changes = {"model": fix_action["to"]}
+
+                    if changes:
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+                                resp = await c.patch(
+                                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                                    headers={**headers, "Content-Type": "application/json"},
+                                    json=changes,
+                                )
+                                if resp.status_code in (200, 204):
+                                    fixes_applied.append({"agent": name, "fix": fix_action})
+                                    issue["auto_fixed"] = True
+                        except Exception as e:
+                            issue["fix_error"] = str(e)
+
+            issues.append(issue)
+
+        # Check: stuck sessions (running for too long)
+        for s in sessions[:1]:
+            if s.get("status") == "running":
+                loop_count = s.get("loop_count", 0)
+                if loop_count > 80:
+                    issues.append({
+                        "agent": name,
+                        "agent_id": agent_id,
+                        "issue": "stuck_session",
+                        "loops": loop_count,
+                        "session_id": str(s.get("id", "?"))[:12],
+                        "recommended_fix": {"action": "stop_and_restart"},
+                    })
+
+    return json.dumps({
+        "agents_checked": len(agents),
+        "issues_found": len(issues),
+        "issues": issues,
+        "fixes_applied": fixes_applied,
+    })
 
 
 async def _stop_agent(args: dict, headers: dict, agents_cache: list[dict]) -> str:

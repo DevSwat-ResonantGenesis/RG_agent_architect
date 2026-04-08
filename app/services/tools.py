@@ -100,6 +100,24 @@ AGENT_TOOLS = [
                         "enum": ["governed", "supervised", "unbounded"],
                         "description": "Autonomy mode. Default: governed",
                     },
+                    "budget": {
+                        "type": "object",
+                        "properties": {
+                            "max_tokens_per_run": {
+                                "type": "integer",
+                                "description": "Max tokens per single run. Default: 50000",
+                            },
+                            "max_runs_per_day": {
+                                "type": "integer",
+                                "description": "Max runs allowed per day. Default: 10",
+                            },
+                            "initial_credits": {
+                                "type": "number",
+                                "description": "Initial credit allocation. Default: 100.0",
+                            },
+                        },
+                        "description": "Budget limits for the agent. Smart defaults applied if omitted.",
+                    },
                 },
                 "required": ["name", "description", "goal", "tools"],
             },
@@ -210,6 +228,136 @@ AGENT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_agent_budget",
+            "description": "Set or update budget limits for an agent — max tokens per run, max runs per day, credit allocation. Use when user wants to control agent spending.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent to set budget for",
+                    },
+                    "max_tokens_per_run": {
+                        "type": "integer",
+                        "description": "Max tokens per single run",
+                    },
+                    "max_runs_per_day": {
+                        "type": "integer",
+                        "description": "Max runs allowed per day",
+                    },
+                    "credits": {
+                        "type": "number",
+                        "description": "Credits to allocate to the agent's wallet",
+                    },
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_agent_wallet",
+            "description": "Check an agent's wallet balance and spending history. Use to review costs or diagnose budget issues.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {
+                        "type": "string",
+                        "description": "Name of the agent to check wallet for",
+                    },
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "auto_build_tool",
+            "description": "Dynamically create a new platform tool at runtime. Describe what the tool should do and it will be built, safety-scanned, and registered. Use when no existing tool covers the need.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Snake_case name for the new tool",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "What the tool does — clear, specific",
+                    },
+                    "input_schema": {
+                        "type": "object",
+                        "description": "JSON schema for tool input parameters",
+                    },
+                    "implementation_hint": {
+                        "type": "string",
+                        "description": "Hint for how to implement (e.g. API endpoint, logic)",
+                    },
+                },
+                "required": ["tool_name", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_tool_exists",
+            "description": "Check if a tool with a given name exists on the platform. Returns the tool if found, or suggests building it.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Name of the tool to check",
+                    },
+                },
+                "required": ["tool_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_built_tool",
+            "description": "Execute a dynamically-built tool by name with given inputs. Use for tools created via auto_build_tool.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {
+                        "type": "string",
+                        "description": "Name of the built tool to execute",
+                    },
+                    "inputs": {
+                        "type": "object",
+                        "description": "Input parameters for the tool",
+                    },
+                },
+                "required": ["tool_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "health_check_agents",
+            "description": "Run a health check across all agents — detect consecutive failures, stuck sessions, depleted budgets. Returns issues found and auto-fix recommendations. Use proactively or when diagnosing problems.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "auto_fix": {
+                        "type": "boolean",
+                        "description": "If true, automatically apply recommended fixes. Default: false",
+                    },
+                },
                 "required": [],
             },
         },

@@ -275,6 +275,7 @@ Respond with ONLY valid JSON (no markdown, no explanation):
       "system_prompt_hint": "You are [role]. Your job is [specific behavior]. Always [constraints].",
       "goal": "Specific, measurable, outcome-oriented goal in 2-3 sentences. NO recurrence language.",
       "goal_priority": 5,
+      "budget": {{"max_tokens_per_run": 50000, "max_runs_per_day": 10, "initial_credits": 100.0}},
       "schedule": null,
       "webhook": false,
       "autonomy_mode": "governed"
@@ -295,7 +296,11 @@ RULES:
 - If task benefits from specialization → create MULTIPLE agents with team_workflow
 - Keep system_prompt_hint focused, specific, actionable
 - Include "assumptions" listing every assumption made
-- If request is vague → make opinionated smart defaults, never generic agents"""
+- If request is vague → make opinionated smart defaults, never generic agents
+- ALWAYS include budget — estimate tokens needed based on task complexity:
+  Simple (search + summarize): max_tokens_per_run=30000, initial_credits=50
+  Medium (multi-step research): max_tokens_per_run=50000, initial_credits=100
+  Complex (scraping, code gen): max_tokens_per_run=80000, initial_credits=200"""
 
 # ═══════════════════════════════════════════════════════════════
 # BRAINSTORM PROMPT — opinionated proposal generation
@@ -496,7 +501,7 @@ AGENT MANAGEMENT:
 - list_agents — See all agents with status, model, tools
 - get_agent_details — Deep inspect: config, recent sessions, errors
 - get_agent_sessions — See execution history: status, loops, tokens, errors for each run
-- create_agent — Build new agents with full config
+- create_agent — Build new agents with full config (including budget)
 - modify_agent — Update ANY field: name, description, system_prompt, provider, model, temperature, max_tokens, tools, mode, is_active, max_loops, safety_config, tool_mode, autonomous
 - delete_agent — Remove agents
 - run_agent — Execute immediately
@@ -504,25 +509,45 @@ AGENT MANAGEMENT:
 - stop_agent — Deactivate
 - list_platform_tools — See all 200+ available tools by category
 
+BUDGET & WALLET:
+- create_agent accepts a "budget" object: {{"max_tokens_per_run": 50000, "max_runs_per_day": 10, "initial_credits": 100.0}}
+- set_agent_budget — Update budget limits or deposit credits for an existing agent
+- check_agent_wallet — Check balance, spending history, remaining credits
+- ALWAYS set budget when creating agents. Smart defaults: simple tasks (30k tokens, 10 runs/day, 50 credits), complex tasks (80k tokens, 5 runs/day, 200 credits)
+- If an agent runs out of credits, it stops. Use set_agent_budget to top up.
+
+SELF-EXTENSION (create new tools at runtime):
+- check_tool_exists — Check if a tool with a given name is available on the platform
+- auto_build_tool — Dynamically create and register a new tool. Provide name, description, input_schema, and implementation_hint.
+- execute_built_tool — Run a dynamically-created tool with inputs
+- Use these when no existing tool covers the need. Example: user needs a custom API connector → auto_build_tool to create it, then assign to agents.
+
+HEALTH & RECOVERY:
+- health_check_agents — Scan ALL agents for issues: consecutive failures, stuck sessions, depleted budgets
+- Pass auto_fix=true to automatically apply recommended fixes (increase max_loops, swap model, etc.)
+- Run health_check_agents proactively when diagnosing or when user asks "why is my agent failing"
+
 EXECUTION CONFIG:
 - Agents have a configurable max_loops (1-100) that controls how many iterations they can run. Default is 25.
-- If an agent hits "Maximum loop iterations reached", increase max_loops via modify_agent: {"max_loops": 40}
+- If an agent hits "Maximum loop iterations reached", increase max_loops via modify_agent: {{"max_loops": 40}}
 - Complex tasks (multi-step research, scraping) often need 30-50 loops. Simple tasks need 10-15.
 - max_loops is stored in safety_config and can be set directly via the modify_agent changes object.
 
 WHEN DIAGNOSING FAILURES:
-1. ALWAYS call get_agent_sessions first to see what actually happened
-2. Check the error message — "Maximum loop iterations reached" means increase max_loops
-3. Check loop count vs goal complexity — was the agent given enough iterations?
-4. Look at token usage — high tokens with low loops means expensive steps
-5. Propose concrete fixes, don't just describe the problem
+1. Run health_check_agents first — it scans all agents and identifies issues automatically
+2. ALWAYS call get_agent_sessions to see what actually happened
+3. Check the error message — "Maximum loop iterations reached" means increase max_loops
+4. Check loop count vs goal complexity — was the agent given enough iterations?
+5. Look at token usage — high tokens with low loops means expensive steps
+6. Check wallet balance — depleted credits cause silent failures
+7. Propose concrete fixes, don't just describe the problem. Use auto_fix when appropriate.
 
 WHEN MODIFYING AGENTS:
 - You can change ANY config field via modify_agent
-- To increase loop limit: modify_agent(agent_name="X", changes={"max_loops": 40})
-- To change model: modify_agent(agent_name="X", changes={"model": "gpt-4o", "provider": "openai"})
-- To add tools: modify_agent(agent_name="X", changes={"tools": ["web_search", "fetch_url", "memory_write"]})
-- Multiple changes in one call: modify_agent(agent_name="X", changes={"max_loops": 40, "model": "gpt-4o", "tools": [...]})
+- To increase loop limit: modify_agent(agent_name="X", changes={{"max_loops": 40}})
+- To change model: modify_agent(agent_name="X", changes={{"model": "gpt-4o", "provider": "openai"}})
+- To add tools: modify_agent(agent_name="X", changes={{"tools": ["web_search", "fetch_url", "memory_write"]}})
+- Multiple changes in one call: modify_agent(agent_name="X", changes={{"max_loops": 40, "model": "gpt-4o", "tools": [...]}})
 </platform_capabilities>"""
 
 def build_system_prompt() -> str:
