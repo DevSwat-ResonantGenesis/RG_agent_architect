@@ -61,9 +61,10 @@ async def create_agent_block(agent_id: str, name: str, goal: str, owner_id: str 
     return await _post("/blockchain/blocks/agent", {
         "agent_id": agent_id,
         "agent_hash": agent_hash or agent_id,
-        "name": name,
-        "goal": goal,
-        "owner_id": owner_id,
+        "owner_id": owner_id or "system",
+        "cluster_id": f"workspace-{owner_id}" if owner_id else "default",
+        "cluster_name": name,
+        "capabilities": {"goal": goal},
     })
 
 
