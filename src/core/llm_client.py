@@ -43,7 +43,10 @@ async def _call_unified(messages, model, temperature, max_tokens) -> Dict[str, A
 
 
 async def _call_direct(messages, tools, model, temperature, max_tokens) -> Dict[str, Any]:
-    """Tool-calling: call provider directly (unified LLM strips tools)."""
+    """Tool-calling: call provider directly (unified LLM strips tools).
+
+    Retry strategy: if Groq returns 400 (tool_use_failed), fall back to OpenAI.
+    """
     is_openai = model.startswith("openai/")
     if is_openai:
         url = OPENAI_URL
@@ -70,10 +73,17 @@ async def _call_direct(messages, tools, model, temperature, max_tokens) -> Dict[
             resp = await client.post(
                 url, json=body,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+            if resp.status_code == 400 and not is_openai and OPENAI_API_KEY:
+                logger.warning(f"[LLM] Groq 400, falling back to OpenAI: {resp.text[:200]}")
+                return await _call_direct(messages, tools, "openai/gpt-4o", temperature, max_tokens)
             if resp.status_code != 200:
                 logger.error(f"[LLM] direct {resp.status_code}: {resp.text[:500]}")
             resp.raise_for_status()
             return resp.json()
     except Exception as e:
+        # On Groq failure, try OpenAI fallback if available
+        if not is_openai and OPENAI_API_KEY:
+            logger.warning(f"[LLM] Groq exception, trying OpenAI fallback: {e}")
+            return await _call_direct(messages, tools, "openai/gpt-4o", temperature, max_tokens)
         logger.error(f"[LLM] direct call failed: {e}")
         raise

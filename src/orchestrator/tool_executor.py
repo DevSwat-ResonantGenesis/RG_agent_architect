@@ -85,7 +85,11 @@ class ToolExecutor:
     async def _tool_check_integrations(self, a):
         connected = await integration_client.get_integrations(self.user_id)
         connected_list = [i.get("provider", "") for i in connected.get("integrations", [])]
-        tools_needed = a.get("tools", [])
+        tools_raw = a.get("tools", "")
+        if isinstance(tools_raw, str):
+            tools_needed = [t.strip() for t in tools_raw.split(",") if t.strip()]
+        else:
+            tools_needed = tools_raw or []
         missing = integration_client.check_required_integrations(tools_needed, connected_list)
         return {"connected": connected_list, "missing": missing}
     async def _tool_get_agent_settings(self, a):
@@ -105,7 +109,10 @@ class ToolExecutor:
     # ── Other ──
     async def _tool_open_interface_editor(self, a): return {"status": "editor_opened", "agent_id": a["agent_id"]}
     async def _tool_present_options(self, a):
-        return {"type": a.get("question_type","PickOne"), "question": a.get("question",""), "options": a.get("options",[])}
+        opts = a.get("options", "")
+        if isinstance(opts, str):
+            opts = [o.strip() for o in opts.split(",") if o.strip()]
+        return {"type": "PickOne", "question": a.get("question", ""), "options": opts}
     async def _tool_file(self, a):
         from src.services.file_ops.file_manager import FileManager
         return await FileManager(self.workspace_id).execute(a.get("action","list"), a)
