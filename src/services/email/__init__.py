@@ -1,0 +1,1 @@
+# Email — Mailgun + custom SMTP

@@ -1,0 +1,1 @@
+# Database — per-agent SQLite
