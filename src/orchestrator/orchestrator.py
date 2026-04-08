@@ -84,6 +84,7 @@ class Orchestrator:
         messages = [{"role": "system", "content": system_content}]
         messages.extend(self.history)
         final_text = ""
+        actions_taken = []  # Track what we did for natural summary
 
         for iteration in range(MAX_TOOL_LOOPS):
             try:
@@ -128,19 +129,11 @@ class Orchestrator:
                     logger.error(f"[Orch] tool {name} exception: {e}")
                     result = {"error": str(e)}
 
+                actions_taken.append({"tool": name, "args": args, "result": result})
+
                 if name == "present_options":
                     if not final_text.strip():
-                        # Generate summary of actions taken before showing options
-                        try:
-                            summary_resp = await call_llm(
-                                messages=messages + [{"role": "user", "content": "Briefly summarize what you just did (1-2 sentences). Be natural."}],
-                                model="groq/llama-3.3-70b-versatile",
-                            )
-                            sc = summary_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-                            if sc:
-                                final_text = sc
-                        except Exception:
-                            pass
+                        final_text = _summarize_actions(actions_taken)
                     return {"text": final_text, "options": result, "mode": mode.value}
 
                 messages.append({
@@ -149,21 +142,8 @@ class Orchestrator:
                     "content": json.dumps(result, default=str) if not isinstance(result, str) else result,
                 })
 
-            # Loop continues — next iteration calls LLM with tool results
-
-        # If text is still empty (Groq doesn't emit content with tool_calls),
-        # make one final call WITHOUT tools to force a natural text response
-        if not final_text.strip():
-            try:
-                summary_resp = await call_llm(
-                    messages=messages + [{"role": "user", "content": "Summarize what you just did in 1-2 sentences. Be natural, concise."}],
-                    model="groq/llama-3.3-70b-versatile",
-                )
-                sc = summary_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if sc:
-                    final_text = sc
-            except Exception:
-                pass
+        if not final_text.strip() and actions_taken:
+            final_text = _summarize_actions(actions_taken)
 
         return {"text": final_text, "mode": mode.value}
 
@@ -177,3 +157,39 @@ class Orchestrator:
         if outcome in ("PARTIAL", "FAIL"):
             return {"text": f"{etype.title()} {outcome}.", "options": ["Fix issue", "Show details"]}
         return {"text": "Event received.", "options": []}
+
+
+def _summarize_actions(actions: list) -> str:
+    """Build a natural text summary from the actions the LLM took."""
+    parts = []
+    for a in actions:
+        tool = a["tool"]
+        r = a.get("result", {})
+        if not isinstance(r, dict):
+            continue
+        err = r.get("error", "")
+        if tool == "build_agent":
+            name = r.get("name", "agent")
+            if err:
+                parts.append(f"Tried to build **{name}** but hit an error: {err}")
+            else:
+                parts.append(f"Built **{name}** — registered on blockchain with wallet and identity hash.")
+        elif tool == "continue_build":
+            parts.append("Refined the agent's instructions.")
+        elif tool == "set_trigger":
+            interval = r.get("interval", "daily")
+            parts.append(f"Set up a **{interval}** schedule.")
+        elif tool == "run_agent":
+            summary = r.get("summary", "")
+            loops = r.get("loops", 0)
+            if err:
+                parts.append(f"Run failed: {err}")
+            else:
+                parts.append(f"Ran the agent ({loops} steps). {summary}" if summary else f"Ran the agent ({loops} steps).")
+        elif tool == "delete_agent":
+            parts.append("Deleted the agent.")
+        elif tool == "stop_run":
+            parts.append("Stopped the run.")
+        elif tool == "present_options":
+            pass
+    return " ".join(parts) if parts else ""
