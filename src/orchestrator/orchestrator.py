@@ -67,9 +67,13 @@ class Orchestrator:
         for h in self.history:
             messages.append(h)
         if tool_results:
-            messages.append({"role": "user", "content": json.dumps(tool_results)})
+            messages.append({"role": "user", "content": f"Tool results:\n{json.dumps(tool_results, default=str)}"})
         try:
-            resp = await call_llm(messages=messages, model="llama-3.3-70b-versatile")
+            resp = await call_llm(
+                messages=messages,
+                tools=ORCHESTRATOR_TOOLS,
+                model="groq/llama-3.3-70b-versatile",
+            )
             choice = resp.get("choices", [{}])[0]
             msg = choice.get("message", {})
             content = msg.get("content", "")
