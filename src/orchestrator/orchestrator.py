@@ -117,8 +117,8 @@ class Orchestrator:
                 fn = tc.get("function", {})
                 name = fn.get("name", "")
                 try:
-                    args = json.loads(fn.get("arguments", "{}"))
-                except json.JSONDecodeError:
+                    args = json.loads(fn.get("arguments", "{}")) or {}
+                except (json.JSONDecodeError, TypeError):
                     args = {}
 
                 logger.warning(f"[Orch] tool: {name}({list(args.keys())})")
