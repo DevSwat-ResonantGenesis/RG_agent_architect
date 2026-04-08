@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from src.core.config import HISTORY_DEPTH
+from src.core.config import HISTORY_DEPTH, ORCHESTRATOR_MAX_ITERATIONS, MAX_TOKENS
 from src.core.context import fetch_workspace_context
 from src.core.llm_client import call_llm
 from src.models.agent import OperationMode
@@ -15,7 +15,7 @@ from src.prompts.system_prompt import PLATFORM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_LOOPS = 5
+MAX_TOOL_LOOPS = ORCHESTRATOR_MAX_ITERATIONS
 
 
 class Orchestrator:
@@ -92,6 +92,8 @@ class Orchestrator:
                     messages=messages,
                     tools=ORCHESTRATOR_TOOLS,
                     model="groq/llama-3.3-70b-versatile",
+                    temperature=0.5,
+                    max_tokens=MAX_TOKENS,
                 )
             except Exception as e:
                 logger.error(f"LLM call failed iteration {iteration}: {e}")
