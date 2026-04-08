@@ -1,9 +1,14 @@
 """
 RG Agent Architect — LLM Client
-Groq (primary) → OpenAI (fallback). Supports JSON mode.
+
+Handles all LLM API calls for the orchestrator ReAct loop.
+Supports Groq (primary) and OpenAI (fallback) with key rotation.
+Twin architecture: the orchestrator IS the high-reasoning layer.
 """
 import json
 import logging
+import random
+from typing import Optional
 
 import httpx
 
@@ -14,190 +19,153 @@ logger = logging.getLogger(__name__)
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
+# Track which keys hit rate limits
+_rate_limited_keys: set[str] = set()
 
-async def llm_call(
+
+async def call_llm(
     messages: list[dict],
-    *,
-    model: str | None = None,
+    tools: Optional[list[dict]] = None,
+    provider: str = "groq",
+    model: Optional[str] = None,
     temperature: float = 0.3,
-    max_tokens: int = 2000,
-    json_mode: bool = False,
-    user_api_keys: dict | None = None,
-    timeout: float = 25.0,
-) -> str | None:
-    """Call LLM with Groq-first, OpenAI fallback. Returns raw content string."""
-    model = model or settings.DEFAULT_MODEL
-    body: dict = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if json_mode:
-        body["response_format"] = {"type": "json_object"}
+    max_tokens: int = 4096,
+    user_api_keys: Optional[dict[str, str]] = None,
+) -> dict:
+    """Call LLM with tool-use support. Returns the raw API response dict.
 
-    # Collect Groq keys: user-provided first, then env
-    groq_keys = []
-    if user_api_keys and user_api_keys.get("groq"):
-        groq_keys.append(user_api_keys["groq"])
-    groq_keys.extend(k for k in settings.groq_keys() if k not in groq_keys)
+    Args:
+        messages: Chat messages (system + user + assistant + tool)
+        tools: OpenAI-format tool schemas
+        provider: "groq" or "openai"
+        model: Model name override
+        temperature: Sampling temperature
+        max_tokens: Max response tokens
+        user_api_keys: User-provided API keys (override platform keys)
 
-    # Try Groq
-    for key in groq_keys:
-        try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-                resp = await c.post(
-                    GROQ_URL,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json=body,
-                )
-                if resp.status_code in (401, 429):
-                    continue
-                if resp.status_code == 200:
-                    return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.warning(f"[LLM] Groq call failed: {e}")
-            continue
-
-    # Fallback: OpenAI
-    openai_key = settings.OPENAI_API_KEY
-    if user_api_keys and user_api_keys.get("openai"):
-        openai_key = user_api_keys["openai"]
-    if openai_key:
-        try:
-            oai_body = {**body, "model": settings.REASONING_MODEL}
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-                resp = await c.post(
-                    OPENAI_URL,
-                    headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
-                    json=oai_body,
-                )
-                if resp.status_code == 200:
-                    return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.warning(f"[LLM] OpenAI fallback failed: {e}")
-
-    return None
-
-
-async def llm_json(
-    messages: list[dict],
-    *,
-    model: str | None = None,
-    temperature: float = 0.3,
-    max_tokens: int = 2000,
-    user_api_keys: dict | None = None,
-    timeout: float = 25.0,
-) -> dict | None:
-    """Call LLM and parse JSON response. Returns dict or None."""
-    raw = await llm_call(
-        messages,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        json_mode=True,
-        user_api_keys=user_api_keys,
-        timeout=timeout,
-    )
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        # Try to extract JSON from markdown fences
-        import re
-        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(1))
-            except json.JSONDecodeError:
-                pass
-        logger.warning(f"[LLM] Failed to parse JSON: {raw[:200]}")
-        return None
-
-
-async def llm_call_with_tools(
-    messages: list[dict],
-    tools: list[dict],
-    *,
-    model: str | None = None,
-    temperature: float = 0.2,
-    max_tokens: int = 2000,
-    user_api_keys: dict | None = None,
-    timeout: float = 30.0,
-) -> dict | None:
-    """Call LLM with function-calling tools. Returns full message dict with tool_calls if any.
-
-    Returns: {"role": "assistant", "content": "...", "tool_calls": [...]} or None on failure.
+    Returns:
+        Raw API response dict with choices[0].message
     """
+    if provider == "openai":
+        return await _call_openai(messages, tools, model, temperature, max_tokens, user_api_keys)
+    return await _call_groq(messages, tools, model, temperature, max_tokens, user_api_keys)
+
+
+async def _call_groq(
+    messages: list[dict],
+    tools: Optional[list[dict]],
+    model: Optional[str],
+    temperature: float,
+    max_tokens: int,
+    user_api_keys: Optional[dict[str, str]],
+) -> dict:
+    """Call Groq API with automatic key rotation on rate limits."""
     model = model or settings.DEFAULT_MODEL
-    body: dict = {
+
+    # Build key pool: user key first, then platform keys
+    key_pool = []
+    if user_api_keys and user_api_keys.get("groq"):
+        key_pool.append(user_api_keys["groq"])
+    for k in settings.groq_keys():
+        if k not in _rate_limited_keys:
+            key_pool.append(k)
+    # Add rate-limited keys as last resort
+    for k in settings.groq_keys():
+        if k in _rate_limited_keys and k not in key_pool:
+            key_pool.append(k)
+
+    if not key_pool:
+        raise ValueError("No Groq API keys configured")
+
+    payload = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "tools": tools,
-        "tool_choice": "auto",
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
 
-    groq_keys = []
-    if user_api_keys and user_api_keys.get("groq"):
-        groq_keys.append(user_api_keys["groq"])
-    groq_keys.extend(k for k in settings.groq_keys() if k not in groq_keys)
-
-    # Try Groq
-    for key in groq_keys:
+    last_error = None
+    for api_key in key_pool:
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-                resp = await c.post(
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
                     GROQ_URL,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
                 )
-                if resp.status_code in (401, 429):
-                    continue
+
                 if resp.status_code == 200:
-                    msg = resp.json()["choices"][0]["message"]
-                    logger.info(f"[LLM] Tool call response: content={bool(msg.get('content'))}, tool_calls={len(msg.get('tool_calls', []))}")
-                    return msg
+                    _rate_limited_keys.discard(api_key)
+                    return resp.json()
+
+                if resp.status_code == 429:
+                    _rate_limited_keys.add(api_key)
+                    logger.warning(f"[LLM] Groq key rate-limited, rotating...")
+                    last_error = f"Rate limited (429)"
+                    continue
+
+                last_error = f"Groq {resp.status_code}: {resp.text[:200]}"
+                logger.error(f"[LLM] {last_error}")
+
+        except httpx.TimeoutException:
+            last_error = "Groq timeout"
+            logger.warning(f"[LLM] Groq timeout, trying next key...")
+            continue
         except Exception as e:
-            logger.warning(f"[LLM] Groq tool call failed: {e}")
+            last_error = str(e)
+            logger.error(f"[LLM] Groq error: {e}")
             continue
 
-    # Fallback: OpenAI
-    openai_key = settings.OPENAI_API_KEY
-    if user_api_keys and user_api_keys.get("openai"):
-        openai_key = user_api_keys["openai"]
-    if openai_key:
-        try:
-            oai_body = {**body, "model": settings.REASONING_MODEL}
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-                resp = await c.post(
-                    OPENAI_URL,
-                    headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
-                    json=oai_body,
-                )
-                if resp.status_code == 200:
-                    return resp.json()["choices"][0]["message"]
-        except Exception as e:
-            logger.warning(f"[LLM] OpenAI tool call fallback failed: {e}")
+    # All Groq keys failed — fallback to OpenAI if available
+    if settings.OPENAI_API_KEY:
+        logger.info("[LLM] All Groq keys failed, falling back to OpenAI")
+        return await _call_openai(messages, tools, None, temperature, max_tokens, user_api_keys)
 
-    return None
+    raise RuntimeError(f"All LLM calls failed. Last error: {last_error}")
 
 
-async def llm_fast(
-    prompt: str,
-    *,
-    user_api_keys: dict | None = None,
-    max_tokens: int = 30,
-) -> str:
-    """Ultra-fast single-token-ish call using speed model. Returns stripped text."""
-    result = await llm_call(
-        [{"role": "user", "content": prompt}],
-        model=settings.FAST_MODEL,
-        temperature=0.0,
-        max_tokens=max_tokens,
-        user_api_keys=user_api_keys,
-        timeout=8.0,
-    )
-    return (result or "").strip()
+async def _call_openai(
+    messages: list[dict],
+    tools: Optional[list[dict]],
+    model: Optional[str],
+    temperature: float,
+    max_tokens: int,
+    user_api_keys: Optional[dict[str, str]],
+) -> dict:
+    """Call OpenAI API."""
+    model = model or settings.REASONING_MODEL
+    api_key = (user_api_keys or {}).get("openai") or settings.OPENAI_API_KEY
+
+    if not api_key:
+        raise ValueError("No OpenAI API key configured")
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        resp = await client.post(
+            OPENAI_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+        if resp.status_code == 200:
+            return resp.json()
+
+        raise RuntimeError(f"OpenAI {resp.status_code}: {resp.text[:300]}")

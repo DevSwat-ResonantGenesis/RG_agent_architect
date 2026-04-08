@@ -1,24 +1,22 @@
 """
 RG Agent Architect — FastAPI Application
-Standalone orchestrator service for building and running autonomous agents.
+
+Twin architecture orchestrator service.
+Manages agent lifecycle, workspace context, and real-time event processing.
 """
 import logging
-import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
 app = FastAPI(
     title="RG Agent Architect",
-    version="1.0.0",
-    description="Standalone orchestrator for building and running autonomous agents on Resonant Genesis.",
+    description="Twin architecture orchestrator — manages agent lifecycle via ReAct loop",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -33,9 +31,5 @@ app.include_router(router)
 
 
 @app.get("/health")
-async def health():
-    return {
-        "status": "healthy",
-        "service": "rg_agent_architect",
-        "version": "1.0.0",
-    }
+async def root_health():
+    return {"status": "healthy", "service": "agent_architect", "version": "2.0.0"}

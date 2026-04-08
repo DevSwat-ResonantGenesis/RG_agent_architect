@@ -1,396 +1,42 @@
 """
-RG Agent Architect — Tool Definitions for ReAct Agent Loop
+RG Agent Architect — Tool Definitions
 
-These are the function schemas the LLM can call during orchestration.
-Instead of regex routing, the LLM decides which tool to call based on
-the user's message and conversation context.
+All tool schemas the orchestrator LLM can call during the ReAct loop.
+Derived from twin.md Section 2 (21 orchestrator tools) + platform extensions.
+
+Tool categories:
+1. Workspace & Context (workspace_snapshot, agent_snapshot, run_snapshot, list_agents,
+   get_agent_details, list_platform_tools, list_workspace_databases, query_cross_agent_database)
+2. Agent Lifecycle (create_agent, modify_agent, continue_build, message_build, delete_agent,
+   run_agent, stop_agent, schedule_agent, set_agent_budget, check_agent_wallet)
+3. User Interface (present_options, respond_to_user, present_billing_offer, open_interface_editor)
+4. Utility (get_user_memory, update_user_memory, get_credits_info, get_current_time,
+   set_workspace_name, configure_smtp, delete_smtp, file_operation)
+5. Self-Extension (auto_build_tool, check_tool_exists, execute_built_tool)
+6. Health (health_check_agents, get_agent_sessions)
 """
 
 AGENT_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "list_agents",
-            "description": "List all agents in the user's workspace. Shows name, model, tools, status for each agent. Use this when the user asks about their agents, wants a workspace overview, or you need to find an agent by name before operating on it.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_agent_details",
-            "description": "Get detailed info about a specific agent including recent run sessions, status, tools, and configuration. Use this to check agent health, diagnose issues, or review before modifying.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to inspect",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_agent",
-            "description": "Permanently delete an agent from the workspace. Use when the user asks to delete, remove, or destroy an agent. Act immediately — do not ask for confirmation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to delete",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_agent",
-            "description": "Create a new agent with full configuration. You MUST provide a detailed system_prompt with step-by-step INSTRUCTIONS — this is what makes agents work. After creating, ALWAYS call run_agent immediately. Never create without running.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Descriptive agent name",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Clear 1-sentence purpose",
-                    },
-                    "system_prompt": {
-                        "type": "string",
-                        "description": "CRITICAL: Detailed step-by-step instructions for the agent. Must include: role definition, numbered steps with specific tool names and queries, expected output format, where to store results, and constraints. This is the agent's playbook — without it, the agent will wander aimlessly.",
-                    },
-                    "goal": {
-                        "type": "string",
-                        "description": "Specific, measurable, outcome-oriented goal in 2-3 sentences",
-                    },
-                    "provider": {
-                        "type": "string",
-                        "enum": ["groq", "openai", "anthropic", "google"],
-                        "description": "LLM provider. Default: groq",
-                    },
-                    "model": {
-                        "type": "string",
-                        "description": "Model name. Default: llama-3.3-70b-versatile",
-                    },
-                    "tools": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of platform tool names this agent can use",
-                    },
-                    "temperature": {
-                        "type": "number",
-                        "description": "LLM temperature. Default: 0.6",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["governed", "supervised", "unbounded"],
-                        "description": "Autonomy mode. Default: governed",
-                    },
-                    "max_loops": {
-                        "type": "integer",
-                        "description": "Maximum execution iterations. Default: 25. Set 30-50 for complex multi-step tasks, 15-20 for simple tasks. NEVER use default for complex work.",
-                    },
-                    "budget": {
-                        "type": "object",
-                        "properties": {
-                            "max_tokens_per_run": {
-                                "type": "integer",
-                                "description": "Max tokens per single run. Default: 50000",
-                            },
-                            "max_runs_per_day": {
-                                "type": "integer",
-                                "description": "Max runs allowed per day. Default: 10",
-                            },
-                            "initial_credits": {
-                                "type": "number",
-                                "description": "Initial credit allocation. Default: 100.0",
-                            },
-                        },
-                        "description": "Budget limits for the agent. Smart defaults applied if omitted.",
-                    },
-                },
-                "required": ["name", "description", "system_prompt", "goal", "tools"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_agent",
-            "description": "Execute an existing agent immediately. ALWAYS call this right after create_agent — never leave an agent unrun. Returns the execution result or status.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to run",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "modify_agent",
-            "description": "Update an existing agent's configuration — change tools, model, goal, description, system prompt, or other settings.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to modify",
-                    },
-                    "changes": {
-                        "type": "object",
-                        "description": "Key-value pairs of fields to update. Valid keys: name, description, system_prompt, provider, model, temperature, max_tokens, tools, mode, is_active, max_loops (1-100, controls how many iterations the agent can run before stopping), safety_config (JSON with max_loops, allowed_actions, etc.), tool_mode, autonomous",
-                    },
-                },
-                "required": ["agent_name", "changes"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "schedule_agent",
-            "description": "Set up automated recurring runs for an agent. Specify interval in seconds or cron expression.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to schedule",
-                    },
-                    "interval_seconds": {
-                        "type": "integer",
-                        "description": "Run interval in seconds. Common: 3600=hourly, 86400=daily, 604800=weekly",
-                    },
-                    "cron_expression": {
-                        "type": "string",
-                        "description": "Cron expression for schedule. Alternative to interval_seconds.",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "stop_agent",
-            "description": "Deactivate an agent — stops it from running. Does not delete it.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to stop/deactivate",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_agent_sessions",
-            "description": "Get recent execution sessions for an agent — shows status (completed/failed/running), loop count, tokens used, errors, and goals. Use this to diagnose why an agent failed, check if it's running, or review past performance.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to check sessions for",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_platform_tools",
-            "description": "List all available platform tools that agents can use. Returns tool names organized by category (search, memory, code, media, integrations, etc.). Use when the user asks what tools are available or when you need to recommend tools for an agent.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_agent_budget",
-            "description": "Set or update budget limits for an agent — max tokens per run, max runs per day, credit allocation. Use when user wants to control agent spending.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to set budget for",
-                    },
-                    "max_tokens_per_run": {
-                        "type": "integer",
-                        "description": "Max tokens per single run",
-                    },
-                    "max_runs_per_day": {
-                        "type": "integer",
-                        "description": "Max runs allowed per day",
-                    },
-                    "credits": {
-                        "type": "number",
-                        "description": "Credits to allocate to the agent's wallet",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "check_agent_wallet",
-            "description": "Check an agent's wallet balance and spending history. Use to review costs or diagnose budget issues.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to check wallet for",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "auto_build_tool",
-            "description": "Dynamically create a new platform tool at runtime. Describe what the tool should do and it will be built, safety-scanned, and registered. Use when no existing tool covers the need.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tool_name": {
-                        "type": "string",
-                        "description": "Snake_case name for the new tool",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "What the tool does — clear, specific",
-                    },
-                    "input_schema": {
-                        "type": "object",
-                        "description": "JSON schema for tool input parameters",
-                    },
-                    "implementation_hint": {
-                        "type": "string",
-                        "description": "Hint for how to implement (e.g. API endpoint, logic)",
-                    },
-                },
-                "required": ["tool_name", "description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "check_tool_exists",
-            "description": "Check if a tool with a given name exists on the platform. Returns the tool if found, or suggests building it.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tool_name": {
-                        "type": "string",
-                        "description": "Name of the tool to check",
-                    },
-                },
-                "required": ["tool_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "execute_built_tool",
-            "description": "Execute a dynamically-built tool by name with given inputs. Use for tools created via auto_build_tool.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tool_name": {
-                        "type": "string",
-                        "description": "Name of the built tool to execute",
-                    },
-                    "inputs": {
-                        "type": "object",
-                        "description": "Input parameters for the tool",
-                    },
-                },
-                "required": ["tool_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "health_check_agents",
-            "description": "Run a health check across all agents — detect consecutive failures, stuck sessions, depleted budgets. Returns issues found and auto-fix recommendations. Use proactively or when diagnosing problems.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "auto_fix": {
-                        "type": "boolean",
-                        "description": "If true, automatically apply recommended fixes. Default: false",
-                    },
-                },
-                "required": [],
-            },
-        },
-    },
-    # ── NEW TOOLS: Twin-level orchestrator capabilities ──
+    # ═══════════════════════════════════════════════════════════
+    # 1. WORKSPACE & CONTEXT — Twin session_start + review tools
+    # ═══════════════════════════════════════════════════════════
     {
         "type": "function",
         "function": {
             "name": "workspace_snapshot",
-            "description": "Get a complete workspace overview in one call: all agents with status, available platform tools, and user memory facts. Use this at the START of every session to understand the user's current state before taking any action.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
+            "description": "Get a complete workspace overview: all agents with status, available platform tools, and user memory facts. Call at the START of every session before taking any action.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
         "type": "function",
         "function": {
             "name": "agent_snapshot",
-            "description": "Deep inspect a specific agent: full config, system_prompt/instructions, recent run history with outcomes, tools assigned, budget status. Use to understand what an agent does before modifying or diagnosing it.",
+            "description": "Deep inspect a specific agent: full config, system_prompt/instructions, recent run history with outcomes, tools assigned, budget status.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to inspect deeply",
-                    },
+                    "agent_name": {"type": "string", "description": "Name of the agent to inspect"},
                 },
                 "required": ["agent_name"],
             },
@@ -400,18 +46,12 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "run_snapshot",
-            "description": "Get the full trace of a single agent run: every decision, tool call, result, and error. Use to diagnose why a specific run failed or to review what the agent actually did.",
+            "description": "Full trace of a single agent run: every decision, tool call, result, and error. Use to diagnose why a run failed or review what the agent did.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent",
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session/run ID to inspect. If omitted, uses the most recent run.",
-                    },
+                    "agent_name": {"type": "string", "description": "Name of the agent"},
+                    "session_id": {"type": "string", "description": "Session/run ID. If omitted, uses most recent."},
                 },
                 "required": ["agent_name"],
             },
@@ -420,75 +60,256 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_user_memory",
-            "description": "Recall persistent user facts stored from previous sessions — role, company, preferences, past decisions. Use at session start or when you need context about the user.",
+            "name": "list_agents",
+            "description": "List all agents in the user's workspace with name, model, tools, status.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_details",
+            "description": "Get detailed info about a specific agent including recent sessions, status, tools, and config.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Optional search query to filter memories. If omitted, returns general user facts.",
-                    },
+                    "agent_name": {"type": "string", "description": "Name of the agent to inspect"},
                 },
-                "required": [],
+                "required": ["agent_name"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "update_user_memory",
-            "description": "Store a new user fact for future sessions. Use when the user shares their role, company, preferences, or any persistent context. Facts persist across all conversations.",
+            "name": "list_platform_tools",
+            "description": "List all available platform tools agents can use, organized by category. Call at session start (list_workspace_tools).",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_workspace_databases",
+            "description": "List all agent SQLite databases in the workspace. Shows which agents have persistent data. Use before query_cross_agent_database.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_cross_agent_database",
+            "description": "Execute a read-only SQL query against an agent's SQLite database. SELECT only. Use to inspect agent data or cross-reference between agents.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The fact to store (e.g. 'User is a SaaS founder building AI tools')",
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "description": "Optional metadata: {type: 'preference'|'role'|'company'|'decision'}",
-                    },
+                    "agent_name": {"type": "string", "description": "Agent whose database to query"},
+                    "query": {"type": "string", "description": "SQL SELECT query"},
                 },
-                "required": ["content"],
+                "required": ["agent_name", "query"],
             },
         },
     },
+
+    # ═══════════════════════════════════════════════════════════
+    # 2. AGENT LIFECYCLE — Twin dispatching + builder/runner
+    # ═══════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "function": {
+            "name": "create_agent",
+            "description": "Create a new agent. You MUST provide detailed system_prompt with step-by-step INSTRUCTIONS. After creating, ALWAYS call run_agent immediately.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Descriptive agent name"},
+                    "description": {"type": "string", "description": "Clear 1-sentence purpose"},
+                    "system_prompt": {"type": "string", "description": "CRITICAL: Detailed step-by-step instructions. Must include role, numbered steps with tool names, output format, storage, constraints."},
+                    "goal": {"type": "string", "description": "Outcome-oriented goal in 2-3 sentences"},
+                    "provider": {"type": "string", "enum": ["groq", "openai", "anthropic", "google"], "description": "LLM provider. Default: groq"},
+                    "model": {"type": "string", "description": "Model name. Default: llama-3.3-70b-versatile"},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Platform tool names this agent can use"},
+                    "temperature": {"type": "number", "description": "LLM temperature. Default: 0.6"},
+                    "mode": {"type": "string", "enum": ["governed", "supervised", "unbounded"], "description": "Autonomy mode. Default: governed"},
+                    "max_loops": {"type": "integer", "description": "Max execution iterations. Default: 30. Set 30-50 for complex tasks."},
+                    "budget": {
+                        "type": "object",
+                        "properties": {
+                            "max_tokens_per_run": {"type": "integer", "description": "Max tokens per run. Default: 50000"},
+                            "max_runs_per_day": {"type": "integer", "description": "Max runs/day. Default: 10"},
+                            "initial_credits": {"type": "number", "description": "Initial credits. Default: 100.0"},
+                        },
+                    },
+                },
+                "required": ["name", "description", "system_prompt", "goal", "tools"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "continue_build",
+            "description": "Modify/extend an existing agent via rebuild. Instructions MUST be a THREE-PART DELTA: what CHANGES, what STAYS, what STOPS. Twin dispatching: Extend → continue_build.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to rebuild"},
+                    "instructions": {"type": "string", "description": "3-part delta: CHANGES / STAYS / STOPS"},
+                },
+                "required": ["agent_name", "instructions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "message_build",
+            "description": "Send guidance to an active build session. Twin dispatching: Guide → message_build. Queued if no active session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent with active build"},
+                    "message": {"type": "string", "description": "Guidance for the builder"},
+                },
+                "required": ["agent_name", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "modify_agent",
+            "description": "Update an existing agent's configuration — tools, model, goal, description, system prompt, or other settings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to modify"},
+                    "changes": {"type": "object", "description": "Key-value pairs: name, description, system_prompt, provider, model, temperature, tools, mode, is_active, max_loops, safety_config"},
+                },
+                "required": ["agent_name", "changes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_agent",
+            "description": "Execute an agent immediately. ALWAYS call right after create_agent. Twin dispatching: Run → run_agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to run"},
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stop_agent",
+            "description": "Deactivate an agent. Does not delete. Confirm before stopping active runs (Twin proactive_defaults).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to stop"},
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_agent",
+            "description": "Permanently delete an agent. Confirm before deleting (Twin proactive_defaults). Act immediately once confirmed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to delete"},
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_agent",
+            "description": "Set up automated recurring runs (set_trigger). Strip time language from goal; handle scheduling here.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to schedule"},
+                    "interval_seconds": {"type": "integer", "description": "Interval: 3600=hourly, 86400=daily, 604800=weekly"},
+                    "cron_expression": {"type": "string", "description": "Cron expression (alternative to interval)"},
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_agent_budget",
+            "description": "Set budget limits: max tokens/run, max runs/day, credit allocation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to set budget for"},
+                    "max_tokens_per_run": {"type": "integer"},
+                    "max_runs_per_day": {"type": "integer"},
+                    "credits": {"type": "number", "description": "Credits to allocate"},
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_agent_wallet",
+            "description": "Check agent wallet balance and spending history.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_name": {"type": "string", "description": "Agent to check"},
+                },
+                "required": ["agent_name"],
+            },
+        },
+    },
+
+    # ═══════════════════════════════════════════════════════════
+    # 3. USER INTERFACE — Twin present_options, respond, billing
+    # ═══════════════════════════════════════════════════════════
     {
         "type": "function",
         "function": {
             "name": "present_options",
-            "description": "Show clickable choices to the user in the chat interface. Use for confirmations, scope decisions, or collecting input. This is a SEMI-TERMINAL action — after calling this, STOP the loop and wait for user response.",
+            "description": "Show clickable choices to the user. SEMI-TERMINAL: stop loop after calling. Twin uses this for scope confirmations, brainstorm questions, follow-up actions. Supports PickOne/PickMultiple/OpenEnded/Secret types.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "The question or prompt to show the user",
-                    },
+                    "question": {"type": "string", "description": "Question or prompt to show"},
                     "options": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "label": {"type": "string", "description": "Button text"},
-                                "value": {"type": "string", "description": "Value returned when selected"},
+                                "value": {"type": "string", "description": "Return value"},
                                 "description": {"type": "string", "description": "Optional subtitle"},
-                                "icon": {"type": "string", "description": "Optional emoji icon"},
+                                "icon": {"type": "string", "description": "Optional emoji"},
                             },
                             "required": ["label", "value"],
                         },
-                        "description": "2-4 clickable option buttons",
+                        "description": "2-4 clickable options",
                     },
-                    "question_type": {
-                        "type": "string",
-                        "enum": ["PickOne", "PickMultiple", "OpenEnded", "Secret"],
-                        "description": "Type of input: PickOne (radio), PickMultiple (checkboxes), OpenEnded (text), Secret (masked password)",
-                    },
+                    "question_type": {"type": "string", "enum": ["PickOne", "PickMultiple", "OpenEnded", "Secret"], "description": "Input type"},
                     "scope_warning": {
                         "type": "object",
-                        "description": "Optional scope risk warning: {level: 'high'|'moderate', reason: '...', recommendation: '...'}",
+                        "description": "Scope risk warning: {level, reason, recommendation}",
                     },
                 },
                 "required": ["question", "options"],
@@ -498,39 +319,12 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_credits_info",
-            "description": "Check the user's credit balance and billing plan. Use when the user asks about costs, credits, or before creating expensive agents.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_current_time",
-            "description": "Get the current UTC timestamp. Use for scheduling decisions or time-sensitive operations.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "respond_to_user",
-            "description": "Send a final response to the user. ONLY use this AFTER you have completed all actions (create + run + get results). Never use this just to ask the user what to do — act first, report results after. Include follow-up options.",
+            "description": "Send final response AFTER completing all actions. Include follow-up options. Never use just to ask what to do.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "The formatted response message to show the user (supports markdown)",
-                    },
+                    "message": {"type": "string", "description": "Formatted response (supports markdown)"},
                     "options": {
                         "type": "array",
                         "items": {
@@ -542,72 +336,102 @@ AGENT_TOOLS = [
                                 "icon": {"type": "string"},
                             },
                         },
-                        "description": "Follow-up action buttons for the user. Always provide at least 2 options.",
+                        "description": "Follow-up action buttons (2+ options)",
                     },
                 },
                 "required": ["message"],
             },
         },
     },
-    # ── TWIN ARCHITECTURE TOOLS — Full parity with Twin's 21 orchestrator tools ──
     {
         "type": "function",
         "function": {
-            "name": "continue_build",
-            "description": "Modify or extend an existing agent by sending rebuild instructions to the builder. Use when the user wants to change what an agent does, add tools, fix issues, or improve instructions. Instructions must be a THREE-PART DELTA: what CHANGES, what STAYS, what STOPS.",
+            "name": "present_billing_offer",
+            "description": "Show billing/upgrade offer when low on credits or plan-limited.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to rebuild/modify",
-                    },
-                    "instructions": {
-                        "type": "string",
-                        "description": "Rebuild instructions as a 3-part delta:\n1. What CHANGES now (new behavior, tools, goal)\n2. What STAYS THE SAME (preserve existing functionality)\n3. What STOPS happening (remove old behavior)",
-                    },
+                    "reason": {"type": "string", "description": "Why: low_credits, plan_limit, feature_gated"},
+                    "current_plan": {"type": "string"},
+                    "recommended_plan": {"type": "string"},
                 },
-                "required": ["agent_name", "instructions"],
+                "required": ["reason"],
             },
         },
     },
     {
         "type": "function",
         "function": {
-            "name": "message_build",
-            "description": "Send guidance to an agent's active build session. Use when a build is in progress and you need to provide additional context, answer the builder's question, or redirect the build. The message is queued and processed when the builder is ready.",
+            "name": "open_interface_editor",
+            "description": "Launch React app builder on an agent's SQLite database. Agent = backend, interface = product. Suggest after build success + trigger configured.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent with active build",
-                    },
-                    "message": {
-                        "type": "string",
-                        "description": "Guidance message for the builder",
-                    },
+                    "agent_name": {"type": "string", "description": "Agent to build interface for"},
                 },
-                "required": ["agent_name", "message"],
+                "required": ["agent_name"],
             },
+        },
+    },
+
+    # ═══════════════════════════════════════════════════════════
+    # 4. UTILITY — Memory, credits, time, workspace, SMTP, files
+    # ═══════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "function": {
+            "name": "get_user_memory",
+            "description": "Recall persistent user facts: role, company, preferences. Call at session start.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query to filter memories"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_user_memory",
+            "description": "Store a new user fact. Call immediately when learning new facts (Twin brainstorm rule).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Fact to store"},
+                    "metadata": {"type": "object", "description": "{type: preference|role|company|decision}"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_credits_info",
+            "description": "Check user credit balance and billing plan. Call before answering cost questions (Twin review rule).",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get current UTC timestamp for scheduling decisions.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
         "type": "function",
         "function": {
             "name": "set_workspace_name",
-            "description": "Set or rename the user's workspace. Call proactively when creating the first agent if the workspace has a default name.",
+            "description": "Name/rename the workspace. Call proactively when creating first agent.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "New workspace name (e.g. 'Sales Ops', 'Content Machine')",
-                    },
-                    "icon": {
-                        "type": "string",
-                        "description": "Emoji icon for the workspace",
-                    },
+                    "name": {"type": "string", "description": "Workspace name"},
+                    "icon": {"type": "string", "description": "Emoji icon"},
                 },
                 "required": ["name"],
             },
@@ -616,89 +440,18 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "open_interface_editor",
-            "description": "Launch the interface editor to build a shareable React app + API on top of an agent's SQLite database. The agent becomes the backend; the interface is the product. Suggest after successful build + trigger configured.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent to build an interface for",
-                    },
-                },
-                "required": ["agent_name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_workspace_databases",
-            "description": "List all agent SQLite databases in the workspace. Shows which agents have persistent data that can be queried. Use before query_cross_agent_database.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "query_cross_agent_database",
-            "description": "Execute a read-only SQL query against an agent's SQLite database. SELECT only — no INSERT/UPDATE/DELETE. Use to inspect agent data, cross-reference between agents, or answer questions about what agents have collected.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "Name of the agent whose database to query",
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "SQL SELECT query to execute",
-                    },
-                },
-                "required": ["agent_name", "query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "configure_smtp",
-            "description": "Set up a custom SMTP email server for the user. Removes rate limits and Twin branding from sent emails. Collect ALL fields via present_options with Secret type for password BEFORE calling this.",
+            "description": "Set up custom SMTP. Collect ALL fields via present_options with Secret for password FIRST. NEVER include password in goal text.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "host": {
-                        "type": "string",
-                        "description": "SMTP server hostname (e.g. smtp.gmail.com)",
-                    },
-                    "port": {
-                        "type": "integer",
-                        "description": "SMTP port (587 for TLS, 465 for SSL)",
-                    },
-                    "username": {
-                        "type": "string",
-                        "description": "SMTP username/email",
-                    },
-                    "password": {
-                        "type": "string",
-                        "description": "SMTP password (collected via Secret input type)",
-                    },
-                    "from_email": {
-                        "type": "string",
-                        "description": "From email address",
-                    },
-                    "from_name": {
-                        "type": "string",
-                        "description": "From display name",
-                    },
-                    "use_tls": {
-                        "type": "boolean",
-                        "description": "Use TLS encryption. Default: true",
-                    },
+                    "host": {"type": "string", "description": "SMTP hostname"},
+                    "port": {"type": "integer", "description": "587 TLS / 465 SSL"},
+                    "username": {"type": "string"},
+                    "password": {"type": "string", "description": "Collected via Secret type"},
+                    "from_email": {"type": "string"},
+                    "from_name": {"type": "string"},
+                    "use_tls": {"type": "boolean", "description": "Default: true"},
                 },
                 "required": ["host", "port", "username", "password", "from_email"],
             },
@@ -708,10 +461,95 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "delete_smtp",
-            "description": "Remove custom SMTP configuration and revert to default email sending.",
+            "description": "Remove custom SMTP, revert to default.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_operation",
+            "description": "File operations: read, write, download_via_curl, upload_via_curl, extract_zip, list.",
             "parameters": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "action": {"type": "string", "enum": ["read", "write", "download_via_curl", "upload_via_curl", "extract_zip", "list"]},
+                    "filename": {"type": "string", "description": "Bare filename (no paths)"},
+                    "content": {"type": "string", "description": "For write action"},
+                    "url": {"type": "string", "description": "For download/upload"},
+                    "curl_args": {"type": "string", "description": "Extra curl flags"},
+                    "encoding": {"type": "string", "enum": ["text", "base64"]},
+                    "offset_chars": {"type": "integer", "description": "Read paging offset"},
+                    "max_chars": {"type": "integer", "description": "Read max chars"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+
+    # ═══════════════════════════════════════════════════════════
+    # 5. SELF-EXTENSION — Dynamic tool building
+    # ═══════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "function": {
+            "name": "auto_build_tool",
+            "description": "Dynamically create a new platform tool. Describe what it does; it gets built, safety-scanned, and registered.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {"type": "string", "description": "snake_case name"},
+                    "description": {"type": "string", "description": "What the tool does"},
+                    "input_schema": {"type": "object", "description": "JSON schema for inputs"},
+                    "implementation_hint": {"type": "string", "description": "Implementation hint"},
+                },
+                "required": ["tool_name", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_tool_exists",
+            "description": "Check if a tool exists on the platform.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {"type": "string"},
+                },
+                "required": ["tool_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_built_tool",
+            "description": "Execute a dynamically-built tool by name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {"type": "string"},
+                    "inputs": {"type": "object", "description": "Tool input parameters"},
+                },
+                "required": ["tool_name"],
+            },
+        },
+    },
+
+    # ═══════════════════════════════════════════════════════════
+    # 6. HEALTH — Proactive monitoring
+    # ═══════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "function": {
+            "name": "health_check_agents",
+            "description": "Scan all agents for health issues: consecutive failures, stuck sessions, depleted budgets. Returns issues + auto-fix recommendations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "auto_fix": {"type": "boolean", "description": "Auto-apply fixes. Default: false"},
+                },
                 "required": [],
             },
         },
@@ -719,72 +557,14 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "file_operation",
-            "description": "Perform file operations in the workspace: read, write, download_via_curl, upload_via_curl, extract_zip, or list files. Agents use this for data processing, report generation, and file management.",
+            "name": "get_agent_sessions",
+            "description": "Get recent execution sessions for an agent: status, loop count, tokens, errors.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["read", "write", "download_via_curl", "upload_via_curl", "extract_zip", "list"],
-                        "description": "File operation to perform",
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "Bare filename (no paths). Required for read/write/download/upload/extract.",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write (for write action)",
-                    },
-                    "url": {
-                        "type": "string",
-                        "description": "URL for download/upload operations",
-                    },
-                    "curl_args": {
-                        "type": "string",
-                        "description": "Additional curl flags for download/upload",
-                    },
-                    "encoding": {
-                        "type": "string",
-                        "enum": ["text", "base64"],
-                        "description": "Encoding for write: text (default) or base64 for binary",
-                    },
-                    "offset_chars": {
-                        "type": "integer",
-                        "description": "Character offset for paging large files (read action)",
-                    },
-                    "max_chars": {
-                        "type": "integer",
-                        "description": "Max characters to return (read action)",
-                    },
+                    "agent_name": {"type": "string"},
                 },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "present_billing_offer",
-            "description": "Present a billing/upgrade offer to the user when they're running low on credits or need more capacity. Shows plan comparison and upgrade options.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Why the offer is being shown (e.g. 'low_credits', 'plan_limit', 'feature_gated')",
-                    },
-                    "current_plan": {
-                        "type": "string",
-                        "description": "User's current plan",
-                    },
-                    "recommended_plan": {
-                        "type": "string",
-                        "description": "Recommended upgrade plan",
-                    },
-                },
-                "required": ["reason"],
+                "required": ["agent_name"],
             },
         },
     },

@@ -1,7 +1,22 @@
 """
 RG Agent Architect — API Routers
-REST + SSE streaming endpoints that delegate to the orchestrator.
+
+REST + SSE streaming endpoints.
+Twin architecture: twin.md full orchestrator surface.
+
+Endpoints:
+  POST /architect/orchestrate          — Main orchestration (chat → structured response)
+  POST /architect/orchestrate/stream   — SSE streaming orchestration
+  POST /architect/classify-intent      — Intent classification for routing
+  POST /architect/health-check         — Proactive agent health scan
+  POST /architect/run-complete         — Post-run health webhook
+  POST /architect/run-event            — Twin run event state machine webhook
+  GET  /architect/events/{user_id}     — Pending events polling
+  GET  /architect/events/{user_id}/stream — Event SSE stream
+  GET  /architect/health               — Container health
 """
+import asyncio
+import json
 import logging
 from typing import Any
 
@@ -60,13 +75,10 @@ class RunEventRequest(BaseModel):
 
 @router.post("/orchestrate")
 async def orchestrate_endpoint(req: OrchestrateRequest, request: Request):
-    """Main entry point. Chat service calls this with a user message
-    and gets back a structured response with summary, options, and metadata.
-    """
+    """Main entry point. Chat service sends user message, gets structured response."""
     headers = _extract_headers(request)
     if not headers.get("x-user-id"):
         headers["x-user-id"] = req.user_id
-
     result = await orchestrate(
         message=req.message,
         user_id=req.user_id,
@@ -79,13 +91,7 @@ async def orchestrate_endpoint(req: OrchestrateRequest, request: Request):
 
 @router.post("/orchestrate/stream")
 async def orchestrate_stream_endpoint(req: OrchestrateRequest, request: Request):
-    """SSE streaming version of orchestrate. Streams real-time events:
-    - status: context gathering progress
-    - thinking: ReAct iteration number
-    - tool_call: which tool is being called
-    - tool_result: tool execution result
-    - done: final structured response (same format as /orchestrate)
-    """
+    """SSE streaming orchestration. Events: status, thinking, tool_call, tool_result, done."""
     headers = _extract_headers(request)
     if not headers.get("x-user-id"):
         headers["x-user-id"] = req.user_id
@@ -103,27 +109,19 @@ async def orchestrate_stream_endpoint(req: OrchestrateRequest, request: Request)
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 
 @router.post("/classify-intent")
 async def classify_intent_endpoint(req: ClassifyRequest):
-    """Standalone intent classification (used by chat service for routing).
-    Simplified — always returns 'agent_architect' since this service only handles architect requests."""
+    """Standalone intent classification for chat service routing."""
     return {"intent": "agent_architect", "message": req.message[:200]}
 
 
 @router.post("/health-check")
 async def health_check_endpoint(req: HealthCheckRequest, request: Request):
-    """Run proactive health check across all user agents.
-    Detects consecutive failures, stuck sessions, depleted budgets.
-    Pass auto_fix=true to automatically apply recommended fixes.
-    """
+    """Proactive health scan across all agents. Detects failures, stuck sessions, depleted budgets."""
     headers = _extract_headers(request)
     result = await run_health_check(headers=headers, auto_fix=req.auto_fix)
     return result
@@ -131,9 +129,7 @@ async def health_check_endpoint(req: HealthCheckRequest, request: Request):
 
 @router.post("/run-complete")
 async def run_complete_webhook(req: RunCompleteWebhook, request: Request):
-    """Webhook called after each agent run completes.
-    Triggers lightweight post-run health check with auto-fix.
-    """
+    """Post-run health webhook. Auto-fixes patterns of failure."""
     headers = _extract_headers(request)
     result = await check_agent_after_run(
         agent_id=req.agent_id,
@@ -145,59 +141,41 @@ async def run_complete_webhook(req: RunCompleteWebhook, request: Request):
 
 @router.post("/run-event")
 async def run_event_webhook(req: RunEventRequest, request: Request):
-    """Webhook called by Agent Engine when a build or run completes.
-    
-    Twin's Run Event Processing (twin.md Section 6):
-    - Classifies event type (build/run × success/partial/fail/stopped)
-    - Generates follow-up options per Twin's decision tree
-    - Forwards to chat service for real-time user notification
-    - Stores for SSE polling
+    """Twin run event state machine webhook (twin.md lines 449-459).
+
+    Classifies event type, generates follow-up options, forwards to chat.
+    NEVER auto-triggers build/run unless user explicitly asked.
     """
     headers = _extract_headers(request)
     if not headers.get("x-user-id") and req.user_id:
         headers["x-user-id"] = req.user_id
-
     result = await process_run_event(req.model_dump(), headers)
     return result
 
 
 @router.get("/events/{user_id}")
 async def get_user_events(user_id: str):
-    """Get pending run events for a user (for SSE polling).
-    Returns and clears any queued events."""
+    """Get and clear pending run events for a user."""
     events = get_pending_events(user_id)
     return {"events": events, "count": len(events)}
 
 
 @router.get("/events/{user_id}/stream")
 async def stream_user_events(user_id: str):
-    """SSE stream of run events for a user. Long-poll style — returns
-    events as they arrive, keeps connection open."""
-    import asyncio
-    import json
-
+    """SSE stream of run events. Long-poll: 30s window, 2s interval."""
     async def event_generator():
-        # Send initial keepalive
         yield f"data: {json.dumps({'type': 'connected', 'user_id': user_id})}\n\n"
-        
-        # Poll for events every 2 seconds, up to 30 seconds
         for _ in range(15):
             events = get_pending_events(user_id)
             for event in events:
                 yield f"data: {json.dumps(event)}\n\n"
             await asyncio.sleep(2)
-        
-        # Send keepalive before closing
         yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 
@@ -209,7 +187,7 @@ async def health():
 # ── Helpers ──
 
 def _extract_headers(request: Request) -> dict[str, str]:
-    """Extract forwarded auth headers from the incoming request."""
+    """Extract forwarded auth headers."""
     return {
         "x-user-id": request.headers.get("x-user-id", ""),
         "x-user-role": request.headers.get("x-user-role", "user"),

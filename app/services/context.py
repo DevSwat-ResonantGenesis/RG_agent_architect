@@ -1,8 +1,14 @@
 """
-RG Agent Architect — Context Protocol
-Fetches workspace state, tools, and user memory in parallel before any decision.
+RG Agent Architect — Workspace Context
+
+Twin session_start (twin.md lines 365-367):
+"At the start of every session, call workspace_snapshot, get_user_memory,
+and list_workspace_tools in parallel."
+
+This module fetches all three in parallel and returns a unified context dict.
 """
 import asyncio
+import json
 import logging
 
 import httpx
@@ -11,124 +17,122 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
+AGENT_ENGINE_URL = settings.AGENT_ENGINE_URL
+MEMORY_SERVICE_URL = settings.MEMORY_SERVICE_URL
 
-async def fetch_workspace_context(
-    user_id: str,
-    headers: dict[str, str],
-) -> dict:
-    """Fetch agents, tools summary, and user memory — 3 parallel calls.
 
-    Returns dict with keys: agents, tools_summary, memory_facts
+async def fetch_workspace_context(user_id: str, headers: dict) -> dict:
+    """Fetch workspace context in parallel: agents + tools + memory.
+
+    Returns:
+        {
+            "agents": [...],
+            "tools_summary": "...",
+            "tools_by_category": {...},
+            "memory_facts": "...",
+        }
     """
-    ctx: dict = {"agents": [], "tools_summary": "160+ tools available", "memory_facts": ""}
+    agents_task = _fetch_agents(headers)
+    tools_task = _fetch_tools(headers)
+    memory_task = _fetch_memory(user_id, headers)
 
-    async def _fetch_agents():
-        try:
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
-                r = await c.get(f"{settings.AGENT_ENGINE_URL}/agents/", headers=headers)
-                if r.status_code == 200:
-                    data = r.json()
-                    agents = data if isinstance(data, list) else data.get("agents", [])
-                    ctx["agents"] = [
-                        {
-                            "name": a.get("name", "?"),
-                            "id": a.get("id"),
-                            "model": a.get("model", "?"),
-                            "provider": a.get("provider", "?"),
-                            "tools": a.get("tools", []),
-                            "is_active": a.get("is_active", False),
-                            "description": a.get("description", ""),
-                            "mode": a.get("mode", "governed"),
-                        }
-                        for a in agents[:20]
-                    ]
-        except Exception as e:
-            logger.debug(f"[CTX] agents fetch: {e}")
-
-    async def _fetch_tools():
-        try:
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
-                # Try detailed tool list first
-                r = await c.get(
-                    f"{settings.AGENT_ENGINE_URL}/agents/tools/list",
-                    headers=headers,
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    tools = data if isinstance(data, list) else data.get("tools", [])
-                    if tools:
-                        # Group by category with names and descriptions
-                        by_cat: dict[str, list[str]] = {}
-                        for t in tools:
-                            if isinstance(t, dict):
-                                cat = t.get("category", "other")
-                                name = t.get("name", "?")
-                                desc = (t.get("description") or "")[:60]
-                                by_cat.setdefault(cat, []).append(f"{name}" + (f" ({desc})" if desc else ""))
-                            else:
-                                by_cat.setdefault("other", []).append(str(t))
-                        # Build readable summary
-                        lines = [f"{len(tools)} tools available:"]
-                        for cat, names in sorted(by_cat.items()):
-                            lines.append(f"  {cat}: {', '.join(names[:12])}" + (f" +{len(names)-12} more" if len(names) > 12 else ""))
-                        ctx["tools_summary"] = "\n".join(lines)
-                        ctx["tools_by_category"] = by_cat
-                        return
-
-                # Fallback: simpler endpoint
-                r2 = await c.get(
-                    f"{settings.AGENT_ENGINE_URL}/agents/available-tools",
-                    headers=headers,
-                )
-                if r2.status_code == 200:
-                    data = r2.json()
-                    count = len(data.get("tools", [])) if isinstance(data, dict) else len(data) if isinstance(data, list) else 0
-                    if count:
-                        ctx["tools_summary"] = f"{count} tools available"
-        except Exception as e:
-            logger.debug(f"[CTX] tools fetch: {e}")
-
-    async def _fetch_memory():
-        try:
-            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as c:
-                r = await c.post(
-                    f"{settings.MEMORY_SERVICE_URL}/memory/search",
-                    json={"query": "user preferences role company", "user_id": user_id, "limit": 5},
-                    headers=headers,
-                )
-                if r.status_code == 200:
-                    results = r.json().get("results", [])
-                    if results:
-                        facts = [m.get("content", "")[:200] for m in results[:5]]
-                        ctx["memory_facts"] = " | ".join(f for f in facts if f)
-        except Exception as e:
-            logger.debug(f"[CTX] memory fetch: {e}")
-
-    await asyncio.gather(
-        _fetch_agents(), _fetch_tools(), _fetch_memory(),
+    agents, tools_info, memory = await asyncio.gather(
+        agents_task, tools_task, memory_task,
         return_exceptions=True,
     )
-    return ctx
+
+    # Handle exceptions gracefully
+    if isinstance(agents, Exception):
+        logger.warning(f"[CONTEXT] Agents fetch failed: {agents}")
+        agents = []
+    if isinstance(tools_info, Exception):
+        logger.warning(f"[CONTEXT] Tools fetch failed: {tools_info}")
+        tools_info = {"summary": "160+ tools available", "by_category": {}}
+    if isinstance(memory, Exception):
+        logger.warning(f"[CONTEXT] Memory fetch failed: {memory}")
+        memory = ""
+
+    return {
+        "agents": agents,
+        "tools_summary": tools_info.get("summary", "160+ tools available"),
+        "tools_by_category": tools_info.get("by_category", {}),
+        "memory_facts": memory,
+    }
 
 
-async def store_memory(
-    user_id: str,
-    content: str,
-    metadata: dict | None = None,
-) -> bool:
-    """Store a user fact in memory service. Fire-and-forget."""
+async def _fetch_agents(headers: dict) -> list[dict]:
+    """Fetch all agents in the user's workspace."""
     try:
-        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as c:
-            resp = await c.post(
-                f"{settings.MEMORY_SERVICE_URL}/memory/ingest",
-                json={
-                    "user_id": user_id,
-                    "source": "agent_architect",
-                    "content": content,
-                    "metadata": metadata or {"type": "user_fact", "origin": "agent_architect"},
-                },
-            )
-            return resp.status_code in (200, 201)
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            resp = await c.get(f"{AGENT_ENGINE_URL}/agents/", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data if isinstance(data, list) else data.get("agents", [])
     except Exception as e:
-        logger.debug(f"[CTX] memory store failed: {e}")
-        return False
+        logger.warning(f"[CONTEXT] Agent list failed: {e}")
+    return []
+
+
+async def _fetch_tools(headers: dict) -> dict:
+    """Fetch available platform tools (list_workspace_tools)."""
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            resp = await c.get(f"{AGENT_ENGINE_URL}/agents/tools/list", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                tools = data if isinstance(data, list) else data.get("tools", [])
+                by_cat: dict[str, list[str]] = {}
+                for t in tools:
+                    cat = t.get("category", "other") if isinstance(t, dict) else "other"
+                    name = t.get("name", str(t)) if isinstance(t, dict) else str(t)
+                    by_cat.setdefault(cat, []).append(name)
+                return {"summary": f"{len(tools)} tools available", "by_category": by_cat}
+    except Exception as e:
+        logger.warning(f"[CONTEXT] Tools fetch failed: {e}")
+    return {"summary": "160+ tools available", "by_category": {}}
+
+
+async def _fetch_memory(user_id: str, headers: dict) -> str:
+    """Fetch user memory facts (get_user_memory)."""
+    try:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as c:
+            resp = await c.post(
+                f"{MEMORY_SERVICE_URL}/memory/search",
+                json={"query": "user preferences role company", "user_id": user_id, "limit": 10},
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                if results:
+                    facts = [m.get("content", "")[:200] for m in results[:10]]
+                    return " | ".join(f for f in facts if f)
+    except Exception as e:
+        logger.warning(f"[CONTEXT] Memory fetch failed: {e}")
+    return ""
+
+
+def build_context_summary(ctx: dict) -> str:
+    """Build a compact context string for the LLM system message."""
+    agents = ctx.get("agents", [])
+    lines = []
+
+    if agents:
+        lines.append(f"Workspace: {len(agents)} agents")
+        for a in agents[:10]:
+            status = "active" if a.get("is_active") else "inactive"
+            name = a.get("name", "?")
+            model = a.get("model", "?")
+            tools_count = len(a.get("tools", []))
+            lines.append(f"  - {name} ({status}, {model}, {tools_count} tools)")
+    else:
+        lines.append("Workspace: empty (no agents yet)")
+
+    tools_summary = ctx.get("tools_summary", "")
+    if tools_summary:
+        lines.append(f"Platform: {tools_summary}")
+
+    memory = ctx.get("memory_facts", "")
+    if memory:
+        lines.append(f"User context: {memory[:300]}")
+
+    return "\n".join(lines)

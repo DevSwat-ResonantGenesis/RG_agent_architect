@@ -1,8 +1,13 @@
 """
 RG Agent Architect — Data Models
 
-Twin architecture data models for build sessions, run events,
-workspace state, and scope risk analysis.
+Twin architecture data models derived from twin.md:
+- RunEvent + state machine (Section 6: run_events, lines 449-459)
+- ScopeRisk analysis (Section 5: scope_risk, lines 410-429)
+- BuildSession tracking (Section 1: builder vs runner, lines 357-360)
+- WorkspaceState (Section 1: session_start, lines 365-367)
+- OperationMode (Section 4: mode_classification, lines 369-373)
+- DispatchAction (Section 7: dispatching, lines 431-437)
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -15,7 +20,7 @@ from typing import Optional
 # ═══════════════════════════════════════════════════════════════
 
 class RunEventType(str, Enum):
-    """Twin's run event classification."""
+    """Twin run_events (twin.md lines 449-459)."""
     BUILD_SUCCESS = "build_success"
     BUILD_PARTIAL = "build_partial"
     BUILD_FAIL = "build_fail"
@@ -28,14 +33,14 @@ class RunEventType(str, Enum):
 
 
 class OperationMode(str, Enum):
-    """Twin's 3 modes of operation."""
+    """Twin mode_classification (twin.md lines 369-373)."""
     BRAINSTORM = "brainstorm"
     CONTROL = "control"
     REVIEW = "review"
 
 
 class DispatchAction(str, Enum):
-    """Twin's dispatching actions."""
+    """Twin dispatching (twin.md lines 431-437)."""
     CREATE = "create"
     EXTEND = "extend"
     RUN = "run"
@@ -45,7 +50,7 @@ class DispatchAction(str, Enum):
 
 
 class ScopeRiskLevel(str, Enum):
-    """Twin's scope risk levels."""
+    """Twin scope_risk (twin.md lines 410-429)."""
     HIGH = "high"
     MODERATE = "moderate"
     SAFE = "safe"
@@ -57,13 +62,17 @@ class ScopeRiskLevel(str, Enum):
 
 @dataclass
 class RunEvent:
-    """A run or build event received from the Agent Engine.
-    
-    Twin's Run Event Processing state machine (twin.md Section 6/lines 1188-1253):
-    - Classify: build event or run event
-    - Determine outcome: success/partial/fail/stopped/waiting
-    - Generate follow-up options via present_options
-    - NEVER auto-trigger build/run unless user explicitly asked
+    """A run or build event from Agent Engine.
+
+    Twin run_events decision tree (twin.md lines 449-459):
+    - Build SUCCESS (no trigger) → ["Set up a trigger", "Create UI interface", "Try autonomous run"]
+    - Build SUCCESS (has trigger) → ["Create UI interface", "Try autonomous run"]
+    - Build PARTIAL/FAIL → run_snapshot → explain → ["Fix the issue", "Try different approach", "Show full details"]
+    - Run SUCCESS → ["Run again", "Make changes", "Set up schedule"]
+    - Run PARTIAL/FAIL → run_snapshot → explain → ["Fix with rebuild", "Run again", "Show full details"]
+
+    CRITICAL: Never call run_agent, build_agent, or continue_build in response
+    to a [Run Event] unless the user explicitly asked.
     """
     agent_id: str
     agent_name: str
@@ -77,21 +86,19 @@ class RunEvent:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def follow_up_options(self) -> list[dict]:
-        """Generate Twin-style follow-up options based on event type.
-        
-        From twin.md Run Event Processing decision tree.
-        """
+        """Generate Twin-style follow-up options per twin.md lines 454-458."""
         if self.event_type == RunEventType.BUILD_SUCCESS:
-            options = [{"label": "Try autonomous run", "value": "run_agent"}]
+            opts = []
             if not self.has_trigger:
-                options.insert(0, {"label": "Set up trigger", "value": "set_trigger"})
-            options.append({"label": "Build UI", "value": "open_interface_editor"})
-            return options
+                opts.append({"label": "Set up a trigger", "value": "set_trigger"})
+            opts.append({"label": "Create UI interface", "value": "open_interface_editor"})
+            opts.append({"label": "Try autonomous run", "value": "run_agent"})
+            return opts
 
         elif self.event_type in (RunEventType.BUILD_PARTIAL, RunEventType.BUILD_FAIL):
             return [
                 {"label": "Fix the issue", "value": "continue_build"},
-                {"label": "Different approach", "value": "rebuild"},
+                {"label": "Try different approach", "value": "rebuild"},
                 {"label": "Show full details", "value": "run_snapshot"},
             ]
 
@@ -99,17 +106,14 @@ class RunEvent:
             return [
                 {"label": "Resume building", "value": "continue_build"},
                 {"label": "Start fresh", "value": "rebuild"},
-                {"label": "Show full details", "value": "run_snapshot"},
             ]
 
         elif self.event_type == RunEventType.RUN_SUCCESS:
-            options = [
+            return [
                 {"label": "Run again", "value": "run_agent"},
                 {"label": "Make changes", "value": "continue_build"},
+                {"label": "Set up schedule", "value": "set_trigger"},
             ]
-            if not self.has_trigger:
-                options.append({"label": "Set up schedule", "value": "set_trigger"})
-            return options
 
         elif self.event_type in (RunEventType.RUN_PARTIAL, RunEventType.RUN_FAIL):
             return [
@@ -119,21 +123,20 @@ class RunEvent:
             ]
 
         elif self.event_type == RunEventType.WAITING_FOR_INPUT:
-            return [
-                {"label": "Provide input", "value": "message_build"},
-            ]
+            return [{"label": "Provide input", "value": "message_build"}]
 
         return []
 
 
 @dataclass
 class ScopeRisk:
-    """Scope risk analysis result.
-    
-    Twin's Scope Risk Analysis (twin.md Section 5/lines 1144-1185):
+    """Scope risk analysis (twin.md lines 410-429).
+
     HIGH: entity discovery, per-entity HTTP, geographic fan-out, unbounded
     MODERATE: implicit large scope, multi-step pipelines
     SAFE: single API, explicit small bounds, single entity
+
+    When risk detected → present_options: ["Build a small sample first", "Build full scope", "Adjust scope"]
     """
     level: ScopeRiskLevel
     reason: str = ""
@@ -154,25 +157,23 @@ class ScopeRisk:
 
     @classmethod
     def analyze(cls, goal: str) -> "ScopeRisk":
-        """Analyze a goal for scope risk. Returns ScopeRisk with level and reason."""
+        """Analyze a goal for scope risk per twin.md lines 412-428."""
         goal_lower = goal.lower()
 
-        # Check HIGH risk patterns
         for pattern in cls.HIGH_PATTERNS:
             if pattern in goal_lower:
                 return cls(
                     level=ScopeRiskLevel.HIGH,
-                    reason=f"Goal contains '{pattern}' — could fan out into thousands of operations",
-                    recommendation="Consider adding explicit bounds (e.g. 'top 10', 'first 50') or use a sample first",
+                    reason=f"'{pattern}' — could fan out into thousands of operations",
+                    recommendation="Add explicit bounds (e.g. 'top 10', 'first 50') or sample first",
                 )
 
-        # Check MODERATE risk patterns
         for pattern in cls.MODERATE_PATTERNS:
             if pattern in goal_lower:
                 return cls(
                     level=ScopeRiskLevel.MODERATE,
-                    reason=f"Goal contains '{pattern}' — could expand beyond expectations",
-                    recommendation="May want to bound the scope or test with a small sample first",
+                    reason=f"'{pattern}' — could expand beyond expectations",
+                    recommendation="Consider bounding scope or testing with a small sample",
                 )
 
         return cls(level=ScopeRiskLevel.SAFE)
@@ -180,15 +181,15 @@ class ScopeRisk:
 
 @dataclass
 class BuildSession:
-    """Tracks an agent build session.
-    
-    Twin distinguishes between Builder (high-reasoning, expensive) and
-    Runner (fast, cheap). Build sessions track the builder's work.
+    """Tracks a builder session (twin.md lines 357-360).
+
+    Builder = high-reasoning model, expensive, runs once per creation/rebuild.
+    Runner = smaller cheap model, follows instructions.
     """
     agent_id: str
     agent_name: str
     session_id: str = ""
-    status: str = "pending"  # pending, building, completed, failed, stopped
+    status: str = "pending"
     instructions_written: bool = False
     tools_discovered: list = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -198,10 +199,10 @@ class BuildSession:
 
 @dataclass
 class WorkspaceState:
-    """Cached workspace state for session initialization.
-    
-    Twin's Session Init Protocol (twin.md Section 1/lines 1025-1042):
-    3 parallel calls at session start: workspace_snapshot + list_workspace_tools + get_user_memory
+    """Cached workspace state for session init (twin.md lines 365-367).
+
+    Session start: call workspace_snapshot, get_user_memory, and
+    list_workspace_tools in parallel.
     """
     user_id: str
     agents: list = field(default_factory=list)

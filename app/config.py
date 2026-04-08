@@ -1,38 +1,44 @@
 """
 RG Agent Architect — Configuration
+
+All service URLs, LLM keys, and orchestrator parameters.
+Twin architecture: twin.md Sections 1-3.
 """
 import os
 
 
 class Settings:
-    # Downstream services (Docker network names)
+    # ── Downstream Services (Docker network) ──
     AGENT_ENGINE_URL: str = os.getenv("AGENT_ENGINE_URL", "http://agent_engine_service:8000")
     MEMORY_SERVICE_URL: str = os.getenv("MEMORY_SERVICE_URL", "http://memory_service:8000")
     CHAT_SERVICE_URL: str = os.getenv("CHAT_SERVICE_URL", "http://chat_service:8000")
 
-    # LLM API keys
+    # ── LLM API Keys ──
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_API_KEY_2: str = os.getenv("GROQ_API_KEY_2", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
-    # Defaults
+    # ── Model Selection ──
+    # Twin: Builder = high-reasoning (expensive), Runner = smaller (cheap)
     DEFAULT_PROVIDER: str = "groq"
     DEFAULT_MODEL: str = "llama-3.3-70b-versatile"
     FAST_MODEL: str = "llama-3.1-8b-instant"
     REASONING_MODEL: str = "gpt-4o"
 
-    # Execution
+    # ── Execution ──
     EXECUTION_TIMEOUT: float = float(os.getenv("EXECUTION_TIMEOUT", "180"))
     POLL_INTERVAL: float = 5.0
-    POLL_MAX_ROUNDS: int = 40  # 5s * 40 = 200s = 3.3 min polling window
+    POLL_MAX_ROUNDS: int = 40
 
-    # Orchestrator ReAct loop
-    ORCHESTRATOR_MAX_ITERATIONS: int = 20  # was 10 — need more for complex flows
-    ORCHESTRATOR_MAX_TOKENS: int = 4096  # was 2000 — LLM needs room to think
-    ORCHESTRATOR_HISTORY_DEPTH: int = 10  # was 6 — keep more conversation context
-    ORCHESTRATOR_MSG_TRUNCATE: int = 2000  # was 1000 — preserve message detail
+    # ── Orchestrator ReAct Loop ──
+    # Twin's orchestrator iterates: think → tool_call → observe → repeat
+    ORCHESTRATOR_MAX_ITERATIONS: int = 20
+    ORCHESTRATOR_MAX_TOKENS: int = 4096
+    ORCHESTRATOR_HISTORY_DEPTH: int = 10
+    ORCHESTRATOR_MSG_TRUNCATE: int = 2000
 
     def groq_keys(self) -> list[str]:
+        """Return all valid Groq API keys (supports comma-separated)."""
         keys = []
         for raw in (self.GROQ_API_KEY, self.GROQ_API_KEY_2):
             for k in raw.split(","):

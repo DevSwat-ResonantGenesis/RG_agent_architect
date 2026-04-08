@@ -1,1 +1,1 @@
-# RG Agent Architect — standalone orchestrator service
+# RG Agent Architect — Twin Architecture Implementation
