@@ -56,7 +56,19 @@ class Builder:
 
         # 3. Blockchain: identity hash first (needed for agent block)
         identity_result = await chain_client.register_agent_identity(agent_id, name, self.workspace_id, self.user_id)
-        identity_hash = identity_result.get("hash", "") if isinstance(identity_result, dict) else ""
+        # Extract string hash from nested result
+        if isinstance(identity_result, dict):
+            identity_hash = (
+                identity_result.get("hash", "")
+                or identity_result.get("input_hash", "")
+                or identity_result.get("identity_hash", "")
+                or str(identity_result.get("domain", ""))
+            )
+            if isinstance(identity_hash, dict):
+                identity_hash = identity_hash.get("input_hash", "") or str(identity_hash)
+        else:
+            identity_hash = str(identity_result) if identity_result else ""
+        identity_hash = str(identity_hash)
 
         # 4. Parallel: on-chain registration + agent block (with hash) + wallet + hash sphere
         chain_results = await asyncio.gather(
@@ -66,7 +78,9 @@ class Builder:
             chain_client.create_agent_hash_sphere(agent_id, name),
             return_exceptions=True,
         )
-        wallet_addr = chain_results[2].get("address", "") if isinstance(chain_results[2], dict) else ""
+        wallet_addr = ""
+        if isinstance(chain_results[2], dict):
+            wallet_addr = chain_results[2].get("address", "") or chain_results[2].get("wallet_address", "")
 
         # 4. Store build run
         await self.ws_db.save_run(
