@@ -129,6 +129,18 @@ class Orchestrator:
                     result = {"error": str(e)}
 
                 if name == "present_options":
+                    if not final_text.strip():
+                        # Generate summary of actions taken before showing options
+                        try:
+                            summary_resp = await call_llm(
+                                messages=messages + [{"role": "user", "content": "Briefly summarize what you just did (1-2 sentences). Be natural."}],
+                                model="groq/llama-3.3-70b-versatile",
+                            )
+                            sc = summary_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                            if sc:
+                                final_text = sc
+                        except Exception:
+                            pass
                     return {"text": final_text, "options": result, "mode": mode.value}
 
                 messages.append({
@@ -137,8 +149,21 @@ class Orchestrator:
                     "content": json.dumps(result, default=str) if not isinstance(result, str) else result,
                 })
 
-            # After tool results, let the LLM generate a natural response
-            # (loop continues — next iteration will call LLM again with tool results)
+            # Loop continues — next iteration calls LLM with tool results
+
+        # If text is still empty (Groq doesn't emit content with tool_calls),
+        # make one final call WITHOUT tools to force a natural text response
+        if not final_text.strip():
+            try:
+                summary_resp = await call_llm(
+                    messages=messages + [{"role": "user", "content": "Summarize what you just did in 1-2 sentences. Be natural, concise."}],
+                    model="groq/llama-3.3-70b-versatile",
+                )
+                sc = summary_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if sc:
+                    final_text = sc
+            except Exception:
+                pass
 
         return {"text": final_text, "mode": mode.value}
 
