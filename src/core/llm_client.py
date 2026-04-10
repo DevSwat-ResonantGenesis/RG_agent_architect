@@ -1,10 +1,17 @@
-"""LLM Client — Unified service for chat, direct provider for tool calls"""
+"""LLM Client — ALL calls route through the unified LLM service.
+
+No direct Groq/OpenAI calls. No duplicate API keys.
+The unified service handles routing, BYOK, billing, and fallback.
+For tool-calling we set provider=openai since the multi_router Groq
+path strips tools. OpenAI provider in the unified service handles
+tools natively.
+"""
 import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
 
-from src.core.config import LLM_SERVICE_URL, GROQ_API_KEY, OPENAI_API_KEY
+from src.core.config import LLM_SERVICE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +19,7 @@ DEFAULT_MODEL = "groq/llama-3.3-70b-versatile"
 FAST_MODEL = "groq/llama-3.1-8b-instant"
 REASONING_MODEL = "openai/gpt-4o"
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+_URL = f"{LLM_SERVICE_URL}/llm/chat/completions"
 
 
 async def call_llm(
@@ -23,67 +29,45 @@ async def call_llm(
     temperature: float = 0.6,
     max_tokens: int = 4096,
 ) -> Dict[str, Any]:
-    if tools:
-        return await _call_direct(messages, tools, model, temperature, max_tokens)
-    return await _call_unified(messages, model, temperature, max_tokens)
-
-
-async def _call_unified(messages, model, temperature, max_tokens) -> Dict[str, Any]:
-    """Plain chat through unified llm_service."""
-    url = f"{LLM_SERVICE_URL}/llm/chat/completions"
-    body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-    try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(url, json=body)
-            resp.raise_for_status()
-            return resp.json()
-    except Exception as e:
-        logger.error(f"[LLM] unified call failed: {e}")
-        raise
-
-
-async def _call_direct(messages, tools, model, temperature, max_tokens) -> Dict[str, Any]:
-    """Tool-calling: call provider directly (unified LLM strips tools).
-
-    Retry strategy: if Groq returns 400 (tool_use_failed), fall back to OpenAI.
-    """
-    is_openai = model.startswith("openai/")
-    if is_openai:
-        url = OPENAI_URL
-        api_key = OPENAI_API_KEY
-        actual_model = model.replace("openai/", "")
-    else:
-        url = GROQ_URL
-        api_key = GROQ_API_KEY
-        actual_model = model.replace("groq/", "")
-
-    if not api_key:
-        raise RuntimeError(f"No API key for {'OpenAI' if is_openai else 'Groq'}")
-
+    """Single entry point — everything goes through the unified LLM service."""
     body: Dict[str, Any] = {
-        "model": actual_model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "tools": tools,
-        "tool_choice": "auto",
     }
+
+    if tools:
+        # Tool-calling must go through OpenAI provider (multi_router strips tools)
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+        body["provider"] = "openai"
+        body["model"] = "gpt-4o"
+    else:
+        body["model"] = model
+
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                url, json=body,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
-            if resp.status_code == 400 and not is_openai and OPENAI_API_KEY:
-                logger.warning(f"[LLM] Groq 400, falling back to OpenAI: {resp.text[:200]}")
-                return await _call_direct(messages, tools, "openai/gpt-4o", temperature, max_tokens)
+            resp = await client.post(_URL, json=body)
             if resp.status_code != 200:
-                logger.error(f"[LLM] direct {resp.status_code}: {resp.text[:500]}")
+                logger.error(f"[LLM] {resp.status_code}: {resp.text[:500]}")
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            return _normalize_response(data)
     except Exception as e:
-        # On Groq failure, try OpenAI fallback if available
-        if not is_openai and OPENAI_API_KEY:
-            logger.warning(f"[LLM] Groq exception, trying OpenAI fallback: {e}")
-            return await _call_direct(messages, tools, "openai/gpt-4o", temperature, max_tokens)
-        logger.error(f"[LLM] direct call failed: {e}")
+        logger.error(f"[LLM] call failed: {e}")
         raise
+
+
+def _normalize_response(data: Dict) -> Dict:
+    """Ensure tool_calls are inside message (raw OpenAI format).
+
+    The unified service may return tool_calls at the choice level
+    (ChatCompletionChoice.tool_calls) instead of inside message.
+    The orchestrator expects them in message, so we normalize here.
+    """
+    for choice in data.get("choices", []):
+        tc = choice.pop("tool_calls", None)
+        if tc and "message" in choice:
+            if not choice["message"].get("tool_calls"):
+                choice["message"]["tool_calls"] = tc
+    return data

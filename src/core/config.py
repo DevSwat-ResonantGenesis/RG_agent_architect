@@ -29,15 +29,13 @@ PLANS = {
     "max":   {"price": 1000, "credits": 100000, "email_limit": 5000},
 }
 
-# ── API Keys (from .env.production) ──
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-_groq_raw = os.getenv("GROQ_API_KEY", "")
-GROQ_API_KEY = _groq_raw.split(",")[0].strip() if _groq_raw else ""
-GROQ_API_KEY_POOL = [k.strip() for k in _groq_raw.split(",") if k.strip()]
-GROQ_API_KEY_2 = os.getenv("GROQ_API_KEY_2", "")
+# ── API Keys ──
+# LLM keys are NOT needed here — all LLM calls go through the unified
+# LLM service which manages its own keys, BYOK, billing, and fallback.
+# Only keep keys for services the architect calls directly.
 PERPLEXITY_API_KEY = os.getenv("PERPLEXITY_API_KEY", "")
-ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "")
+ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
 MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY", "")
 MAILGUN_DOMAIN = os.getenv("MAILGUN_DOMAIN", "")
