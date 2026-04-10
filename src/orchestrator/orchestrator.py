@@ -10,6 +10,7 @@ from src.core.llm_client import call_llm
 from src.models.agent import OperationMode
 from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.tool_executor import ToolExecutor
+from src.orchestrator.safety import get_safety
 from src.prompts.mode_classifier import classify_mode
 from src.prompts.system_prompt import PLATFORM_PROMPT
 
@@ -25,6 +26,7 @@ class Orchestrator:
         self.tool_executor = ToolExecutor(workspace_id, user_id=self.user_id)
         self.history: List[Dict] = []
         self.context: Optional[Dict[str, Any]] = None
+        self.safety = get_safety()
 
     async def initialize_session(self):
         self.context = await fetch_workspace_context(self.workspace_id, user_id=self.user_id)
@@ -104,7 +106,12 @@ class Orchestrator:
             content = msg.get("content", "")
             raw_tool_calls = msg.get("tool_calls") or []
 
+            # Safety check for LLM response content
             if content:
+                is_safe, safety_error = self.safety.check_llm_response(content)
+                if not is_safe:
+                    logger.error(f"[Orch] Safety blocked LLM response: {safety_error}")
+                    content = f"[Safety blocked: {safety_error}]"
                 final_text += content
 
             if not raw_tool_calls:
@@ -124,6 +131,20 @@ class Orchestrator:
                     args = {}
 
                 logger.warning(f"[Orch] tool: {name}({list(args.keys())})")
+                
+                # Safety check before execution
+                is_safe, safety_error = self.safety.check_tool_args(name, args)
+                if not is_safe:
+                    logger.error(f"[Orch] Safety blocked {name}: {safety_error}")
+                    result = {"error": f"Safety blocked: {safety_error}"}
+                    actions_taken.append({"tool": name, "args": args, "result": result, "blocked": True})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": json.dumps(result, default=str),
+                    })
+                    continue
+                
                 try:
                     result = await self.tool_executor.execute(name, args)
                     logger.warning(f"[Orch] result: {str(result)[:200]}")
