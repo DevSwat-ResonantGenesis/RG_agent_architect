@@ -132,7 +132,7 @@ class LightweightSafety:
 
 
 # Global safety instance
-_safety_instance = Optional[LightweightSafety]
+_safety_instance: Optional[LightweightSafety] = None
 
 
 def get_safety() -> LightweightSafety:
