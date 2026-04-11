@@ -198,6 +198,7 @@ class WorkspaceDB:
         """Store a build/run record via Agent Engine sessions API."""
         payload = {
             "agent_id": agent_id,
+            "goal": summary or "Build agent",
             "status": "completed" if outcome == "SUCCESS" else "failed",
             "summary": summary,
             "loop_count": loop_count,

@@ -154,6 +154,30 @@ class Orchestrator:
 
                 actions_taken.append({"tool": name, "args": args, "result": result})
 
+                # Break after creation/deletion — don't let LLM loop
+                if name in ("build_agent", "delete_agent") and isinstance(result, dict) and not result.get("error"):
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": json.dumps(result, default=str) if not isinstance(result, str) else result,
+                    })
+                    # Force a final LLM call without tools to get a summary
+                    try:
+                        summary_resp = await call_llm(
+                            messages=messages,
+                            model="groq/llama-3.3-70b-versatile",
+                            temperature=0.5,
+                            max_tokens=MAX_TOKENS,
+                        )
+                        summary_text = summary_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if summary_text:
+                            final_text = summary_text
+                    except Exception:
+                        pass
+                    if not final_text.strip():
+                        final_text = _summarize_actions(actions_taken)
+                    return {"text": final_text, "mode": mode.value}
+
                 if name == "present_options":
                     if not final_text.strip():
                         final_text = _summarize_actions(actions_taken)
