@@ -15,9 +15,16 @@ class WorkspaceDB:
     Per-user isolation via x-user-id header. No separate architect_* tables.
     """
 
-    def __init__(self, workspace_id: str):
+    def __init__(self, workspace_id: str, is_superuser: bool = False,
+                 unlimited_credits: bool = False, user_role: str = "user"):
         self.workspace_id = workspace_id
-        self._headers = {"x-user-id": workspace_id, "Content-Type": "application/json"}
+        self._headers = {
+            "x-user-id": workspace_id,
+            "Content-Type": "application/json",
+            "x-is-superuser": "true" if is_superuser else "false",
+            "x-unlimited-credits": "true" if unlimited_credits else "false",
+            "x-user-role": user_role,
+        }
 
     async def get_snapshot(self) -> Dict:
         """List all agents for this user from Agent Engine."""
