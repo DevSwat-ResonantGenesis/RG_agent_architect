@@ -192,6 +192,34 @@ class WorkspaceDB:
             logger.error(f"[WorkspaceDB] set_trigger error: {e}")
             return {"error": str(e)}
 
+    async def save_run(self, run_id: str, agent_id: str, outcome: str = "SUCCESS",
+                       summary: str = "", loop_count: int = 0,
+                       started_at=None, finished_at=None) -> Dict:
+        """Store a build/run record via Agent Engine sessions API."""
+        payload = {
+            "agent_id": agent_id,
+            "status": "completed" if outcome == "SUCCESS" else "failed",
+            "summary": summary,
+            "loop_count": loop_count,
+        }
+        if started_at:
+            payload["started_at"] = str(started_at)
+        if finished_at:
+            payload["finished_at"] = str(finished_at)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}/sessions",
+                    headers=self._headers, json=payload,
+                )
+                if resp.status_code in (200, 201):
+                    return {"run_id": run_id, "saved": True}
+                logger.warning(f"[WorkspaceDB] save_run failed: {resp.status_code} {resp.text[:200]}")
+                return {"run_id": run_id, "saved": False, "error": resp.text[:200]}
+        except Exception as e:
+            logger.warning(f"[WorkspaceDB] save_run error: {e}")
+            return {"run_id": run_id, "saved": False, "error": str(e)}
+
     async def set_workspace_name(self, name: str, icon: str) -> Dict:
         """Workspace naming — stored in memory service as user preference."""
         return {"name": name, "icon": icon}
