@@ -2,9 +2,8 @@
 
 No direct Groq/OpenAI calls. No duplicate API keys.
 The unified service handles routing, BYOK, billing, and fallback.
-For tool-calling we set provider=openai since the multi_router Groq
-path strips tools. OpenAI provider in the unified service handles
-tools natively.
+Tool-calling goes through the multi_router which passes tools to
+Groq/OpenAI natively.
 """
 import logging
 from typing import Any, Dict, List, Optional
@@ -36,14 +35,10 @@ async def call_llm(
         "max_tokens": max_tokens,
     }
 
+    body["model"] = model
     if tools:
-        # Tool-calling must go through OpenAI provider (multi_router strips tools)
         body["tools"] = tools
         body["tool_choice"] = "auto"
-        body["provider"] = "openai"
-        body["model"] = "gpt-4o"
-    else:
-        body["model"] = model
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
