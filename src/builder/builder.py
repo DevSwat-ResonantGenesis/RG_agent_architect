@@ -48,11 +48,13 @@ class Builder:
         instructions = await self._generate_instructions(goal, tools or [])
 
         # 2. Save agent to PostgreSQL
-        await self.ws_db.save_agent(
+        save_result = await self.ws_db.save_agent(
             agent_id=agent_id, name=name, goal=goal, icon=icon,
             system_prompt=instructions, tools=tools or [],
             needs_build=False, max_loops=max_loops,
             temperature=temperature, model=model)
+        # Use the DB-generated ID if available
+        agent_id = save_result.get("agent_id", agent_id)
 
         # 3. Blockchain: identity hash first (needed for agent block)
         identity_result = await chain_client.register_agent_identity(agent_id, name, self.workspace_id, self.user_id)
