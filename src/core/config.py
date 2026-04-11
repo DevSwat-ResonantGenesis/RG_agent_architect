@@ -1,10 +1,21 @@
 """Twin Platform — Configuration Constants"""
 import os
 
-# ── Infrastructure URLs ──
+# ── Infrastructure URLs (full platform access) ──
 AGENT_ENGINE_URL = os.getenv("AGENT_ENGINE_URL", "http://agent_engine_service:8000")
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://llm_service:8000")
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory_service:8000")
+AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth_service:8000")
+BILLING_SERVICE_URL = os.getenv("BILLING_SERVICE_URL", "http://billing_service:8000")
+BLOCKCHAIN_SERVICE_URL = os.getenv("BLOCKCHAIN_SERVICE_URL", "http://blockchain_service:8000")
+NOTIFICATION_SERVICE_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://notification_service:8000")
+CODE_EXECUTION_SERVICE_URL = os.getenv("CODE_EXECUTION_SERVICE_URL", "http://code_execution_service:8002")
+STORAGE_SERVICE_URL = os.getenv("STORAGE_SERVICE_URL", "http://storage_service:8000")
+WORKFLOW_SERVICE_URL = os.getenv("WORKFLOW_SERVICE_URL", "http://workflow_service:8000")
+GATEWAY_URL = os.getenv("GATEWAY_URL", "http://gateway:8000")
+SANDBOX_RUNNER_URL = os.getenv("SANDBOX_RUNNER_URL", "http://sandbox_runner_service:9001")
+AST_ANALYSIS_URL = os.getenv("AST_ANALYSIS_SERVICE_URL", "http://rg_ast_analysis:8000")
+ED_SERVICE_URL = os.getenv("ED_SERVICE_URL", "http://ed_service:8000")
 
 # ── Orchestrator tuning ──
 ORCHESTRATOR_MAX_ITERATIONS = 8
