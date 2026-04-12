@@ -140,23 +140,23 @@ class WorkspaceDB:
             return {"error": str(e)}
 
     async def delete_agent(self, agent_id: str) -> Dict:
-        """Archive agent via Gateway (routes to Agent Engine)."""
+        """Archive agent via Agent Engine API."""
         try:
-            # Route through Gateway instead of directly to service
-            gateway_url = AGENT_ENGINE_URL.replace("agent_engine_service:8000", "gateway:8080/api/v1")
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.delete(
-                    f"{gateway_url}/agents/{agent_id}",
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
                     headers=self._headers,
                 )
                 if resp.status_code in (200, 204):
-                    return {"deleted": agent_id}
+                    try:
+                        body = resp.json()
+                        return {**body, "deleted": agent_id}
+                    except Exception:
+                        return {"deleted": agent_id, "status": "archived"}
                 elif resp.status_code == 404:
                     return {"error": "Agent not found"}
-                elif resp.status_code >= 500:
-                    return {"error": f"Server error: {resp.status_code}"}
                 else:
-                    return {"error": f"Delete failed: {resp.status_code} - {resp.text[:200]}"}
+                    return {"error": f"Delete failed: HTTP {resp.status_code} - {resp.text[:200]}"}
         except Exception as e:
             logger.error(f"[WorkspaceDB] delete_agent error: {e}")
             return {"error": str(e)}
