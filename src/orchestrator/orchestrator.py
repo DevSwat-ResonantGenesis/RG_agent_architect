@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 MAX_TOOL_LOOPS = ORCHESTRATOR_MAX_ITERATIONS
 
 # Tools that are "terminal" — after success, get summary and return
-TERMINAL_TOOLS = {"build_agent", "delete_agent", "modify_agent"}
+# NOTE: delete_agent is NOT terminal so the LLM can loop and delete multiple agents
+TERMINAL_TOOLS = {"build_agent", "modify_agent"}
 
 
 class Orchestrator:
