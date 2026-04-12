@@ -406,7 +406,16 @@ def _summarize_actions(actions: list) -> str:
             else:
                 parts.append(f"Ran the agent ({loops} steps). {summary}" if summary else f"Ran the agent ({loops} steps).")
         elif tool == "delete_agent":
-            parts.append("Deleted the agent.")
+            if err:
+                parts.append(f"Tried to delete agent but hit an error: {err}")
+            else:
+                status = r.get("status", "")
+                if status == "archived":
+                    parts.append("Archived the agent (hidden from active list).")
+                elif status == "already_archived":
+                    parts.append("Agent was already archived.")
+                else:
+                    parts.append("Deleted the agent.")
         elif tool == "stop_run":
             parts.append("Stopped the run.")
         elif tool == "present_options":
