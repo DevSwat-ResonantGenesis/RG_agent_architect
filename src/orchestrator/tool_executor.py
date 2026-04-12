@@ -70,6 +70,7 @@ class ToolExecutor:
         return await Runner(self.workspace_id).run(a["agent_id"], a.get("goal"), user_id=self.user_id)
     async def _tool_stop_run(self, a): return await self.ws_db.stop_run(a["run_id"])
     async def _tool_delete_agent(self, a): return await self.ws_db.delete_agent(a["agent_id"])
+    async def _tool_delete_all_agents(self, a): return await self.ws_db.delete_all_agents()
     async def _tool_modify_agent(self, a):
         from src.builder.builder import Builder
         add_tools = [t.strip() for t in a.get("add_tools", "").split(",") if t.strip()] if a.get("add_tools") else None

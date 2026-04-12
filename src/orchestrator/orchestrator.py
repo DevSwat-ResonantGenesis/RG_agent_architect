@@ -417,6 +417,16 @@ def _summarize_actions(actions: list) -> str:
                     parts.append("Agent was already archived.")
                 else:
                     parts.append("Deleted the agent.")
+        elif tool == "delete_all_agents":
+            if err:
+                parts.append(f"Tried to delete all agents but hit an error: {err}")
+            else:
+                count = r.get("deleted_count", 0)
+                err_count = r.get("error_count", 0)
+                if err_count:
+                    parts.append(f"Deleted {count} agents, {err_count} failed.")
+                else:
+                    parts.append(f"Deleted all {count} agents.")
         elif tool == "stop_run":
             parts.append("Stopped the run.")
         elif tool == "present_options":

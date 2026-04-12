@@ -161,6 +161,41 @@ class WorkspaceDB:
             logger.error(f"[WorkspaceDB] delete_agent error: {e}")
             return {"error": str(e)}
 
+    async def delete_all_agents(self) -> Dict:
+        """Delete ALL agents in workspace by listing then archiving each."""
+        try:
+            snapshot = await self.get_snapshot()
+            agents = snapshot.get("agents", [])
+            if not agents:
+                return {"deleted_count": 0, "message": "No agents found to delete"}
+            deleted = []
+            errors = []
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                for a in agents:
+                    aid = a.get("id", "")
+                    if not aid:
+                        continue
+                    resp = await client.delete(
+                        f"{AGENT_ENGINE_URL}/agents/{aid}",
+                        headers=self._headers,
+                    )
+                    if resp.status_code in (200, 204):
+                        deleted.append({"id": aid, "name": a.get("name", "unknown")})
+                    else:
+                        errors.append({"id": aid, "name": a.get("name", "unknown"), "status": resp.status_code})
+            result = {
+                "deleted_count": len(deleted),
+                "total": len(agents),
+                "deleted": deleted,
+            }
+            if errors:
+                result["errors"] = errors
+                result["error_count"] = len(errors)
+            return result
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] delete_all_agents error: {e}")
+            return {"error": str(e)}
+
     async def stop_run(self, run_id: str) -> Dict:
         """Cancel a running session via Agent Engine."""
         try:
