@@ -82,8 +82,12 @@ class Orchestrator:
             **data,
         }
         logger.info(f"[Orch] SSE: {event_type} — {str(data)[:120]}")
-        if self._progress_queue:
-            await self._progress_queue.put(event)
+        q = self._progress_queue
+        if q:
+            try:
+                await q.put(event)
+            except Exception:
+                pass
 
     # ── Synchronous API (backward compat) ──
 
@@ -329,8 +333,17 @@ class Orchestrator:
                             "actions": actions_taken, "error": error_msg}
 
                 if name == "present_options":
+                    # Extract the question/text from the options so it appears in chat
                     if not final_text.strip():
-                        final_text = _summarize_actions(actions_taken)
+                        opt_question = ""
+                        if isinstance(result, dict):
+                            opt_question = result.get("question", "")
+                        if opt_question:
+                            final_text = opt_question
+                        else:
+                            final_text = _summarize_actions(actions_taken)
+                    # Emit as text event so SSE streaming path captures it
+                    await self._emit_progress("text", {"content": final_text})
                     return {"text": final_text, "options": result, "mode": mode.value}
 
                 messages.append({
