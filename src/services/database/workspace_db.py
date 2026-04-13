@@ -141,6 +141,7 @@ class WorkspaceDB:
 
     async def delete_agent(self, agent_id: str) -> Dict:
         """Archive agent via Agent Engine API."""
+        print(f"[DELETE_AGENT] Deleting {agent_id} with headers x-user-id={self._headers.get('x-user-id')}", flush=True)
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.delete(
@@ -163,6 +164,7 @@ class WorkspaceDB:
 
     async def delete_all_agents(self) -> Dict:
         """Delete ALL agents in workspace by listing then archiving each."""
+        print(f"[DELETE_ALL] Called with x-user-id={self._headers.get('x-user-id')}", flush=True)
         try:
             snapshot = await self.get_snapshot()
             agents = snapshot.get("agents", [])

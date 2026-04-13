@@ -164,6 +164,9 @@ class Orchestrator:
         messages.extend(self.history)
         final_text = ""
         actions_taken = []
+        _last_tool_name = ""
+        _repeat_count = 0
+        _MAX_REPEAT = 2  # Break if same tool called 3+ times in a row
 
         for iteration in range(MAX_TOOL_LOOPS):
             await self._emit_progress("thinking", {
@@ -198,6 +201,7 @@ class Orchestrator:
                 await self._emit_progress("text", {"content": content})
 
             if not raw_tool_calls:
+                print(f"[Orch] NO TOOL CALLS - LLM text response: {content[:200]}", flush=True)
                 break
 
             assistant_msg = {"role": "assistant", "content": content or None}
@@ -213,7 +217,26 @@ class Orchestrator:
                 except (json.JSONDecodeError, TypeError):
                     args = {}
 
+                print(f"[Orch] TOOL CALL: {name}({args})", flush=True)
                 logger.warning(f"[Orch] tool: {name}({list(args.keys())})")
+
+                # Repeated tool detection — break infinite loops
+                if name == _last_tool_name:
+                    _repeat_count += 1
+                else:
+                    _last_tool_name = name
+                    _repeat_count = 0
+
+                if _repeat_count >= _MAX_REPEAT:
+                    logger.warning(f"[Orch] BREAKING: {name} called {_repeat_count + 1}x in a row — forcing text response")
+                    # Inject nudge so LLM produces a text answer
+                    messages.append({
+                        "role": "tool", "tool_call_id": tc_id,
+                        "content": json.dumps({"notice": f"You already called {name} {_repeat_count + 1} times. You have the data. Now respond to the user with a text answer — do NOT call any more tools."}, default=str),
+                    })
+                    await self._emit_progress("warning", {"message": f"Breaking repeated {name} loop"})
+                    break  # break inner for-loop to re-enter LLM call without tools
+
                 await self._emit_progress("tool_call", {
                     "tool": name,
                     "args_keys": list(args.keys()),
@@ -234,6 +257,7 @@ class Orchestrator:
 
                 try:
                     result = await self.tool_executor.execute(name, args)
+                    print(f"[Orch] RESULT: {str(result)[:300]}", flush=True)
                     logger.warning(f"[Orch] result: {str(result)[:200]}")
                 except Exception as e:
                     logger.error(f"[Orch] tool {name} exception: {e}")

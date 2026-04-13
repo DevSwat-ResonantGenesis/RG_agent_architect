@@ -40,14 +40,20 @@ async def call_llm(
         body["tools"] = tools
         body["tool_choice"] = "auto"
 
+    print(f"[LLM] Calling model={model} tools={len(tools) if tools else 0} msgs={len(messages)}", flush=True)
+
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
             resp = await client.post(_URL, json=body)
             if resp.status_code != 200:
+                print(f"[LLM] ERROR {resp.status_code}: {resp.text[:300]}", flush=True)
                 logger.error(f"[LLM] {resp.status_code}: {resp.text[:500]}")
             resp.raise_for_status()
             data = resp.json()
-            return _normalize_response(data)
+            normalized = _normalize_response(data)
+            tc = normalized.get("choices", [{}])[0].get("message", {}).get("tool_calls")
+            print(f"[LLM] Response: tool_calls={len(tc) if tc else 0}, content_len={len(normalized.get('choices', [{}])[0].get('message', {}).get('content', '') or '')}", flush=True)
+            return normalized
     except Exception as e:
         logger.error(f"[LLM] call failed: {e}")
         raise
