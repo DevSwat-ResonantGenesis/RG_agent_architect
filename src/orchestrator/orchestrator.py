@@ -18,7 +18,7 @@ from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.tool_executor import ToolExecutor
 from src.orchestrator.safety import get_safety
 from src.prompts.mode_classifier import classify_mode
-from src.prompts.system_prompt import assemble_prompt
+from src.prompts.router import get_router
 
 logger = logging.getLogger(__name__)
 
@@ -188,8 +188,12 @@ class Orchestrator:
         agent_count = len(agents)
         agent_names = [a.get("name", "?") for a in agents]
 
-        system_content = assemble_prompt(
+        # Smart prompt selection: router picks only relevant prompt modules
+        user_msg = self.history[-1]["content"] if self.history else ""
+        router = get_router()
+        system_content = router.route(
             mode=mode.value,
+            user_message=user_msg,
             context_block=context_block,
             agent_count=agent_count,
             agent_names=agent_names,
