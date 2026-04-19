@@ -87,6 +87,19 @@ class Builder:
 
         agent_id = str(uuid.uuid4())
 
+        # ── PHASE 0.5: Credit check ──
+        try:
+            credit_check = await billing_client.check_credits(self.user_id)
+            if not credit_check.get("has_credits", True):
+                await self._emit("error", "Insufficient credits to build agent")
+                return {
+                    "error": "Credits exhausted. Please upgrade your plan or purchase credits.",
+                    "outcome": "FAIL",
+                    "name": name,
+                }
+        except Exception as e:
+            logger.warning(f"[Builder] Credit check failed (proceeding): {e}")
+
         # ── PHASE 1: Generate instructions ──
         await self._emit("planning", f"Generating instructions for '{name}'...")
         try:
