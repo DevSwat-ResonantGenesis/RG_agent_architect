@@ -178,6 +178,17 @@ class Orchestrator:
                 "picture of what an agent could do, and confirm before building. Use present_options "
                 "to offer 2-3 specific agent ideas based on the conversation.\n</mode_override>"
             )
+        elif mode == OperationMode.REVIEW:
+            agent_count = len(self.context.get("workspace", {}).get("agents", []))
+            agent_names = [a.get("name", "?") for a in self.context.get("workspace", {}).get("agents", [])]
+            system_content += (
+                f"\n<mode_override>\nThe user is asking a REVIEW question about their agents or workspace. "
+                f"Answer their EXACT question directly using the <context> block above. "
+                f"They have {agent_count} agent(s): {', '.join(agent_names)}. "
+                f"Do NOT continue any previous conversation thread. Do NOT talk about building or modifying agents "
+                f"unless the user specifically asks. Answer the question, then suggest what they could do next."
+                f"\n</mode_override>"
+            )
         elif mode == OperationMode.DIAGNOSE:
             system_content += (
                 "\n<mode_override>\nThe user suspects something is broken. Investigate before acting. "
@@ -186,7 +197,11 @@ class Orchestrator:
             )
 
         messages = [{"role": "system", "content": system_content}]
-        messages.extend(self.history)
+        # For REVIEW mode, trim old history aggressively — user is asking a new question
+        if mode == OperationMode.REVIEW and len(self.history) > 4:
+            messages.extend(self.history[-4:])
+        else:
+            messages.extend(self.history)
         final_text = ""
         actions_taken = []
         _last_tool_name = ""
