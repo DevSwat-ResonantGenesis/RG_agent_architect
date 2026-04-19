@@ -27,6 +27,7 @@ async def call_llm(
     model: str = DEFAULT_MODEL,
     temperature: float = 0.6,
     max_tokens: int = 16000,
+    user_api_keys: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Single entry point — everything goes through the unified LLM service."""
     body: Dict[str, Any] = {
@@ -39,6 +40,8 @@ async def call_llm(
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
+    if user_api_keys:
+        body["user_api_keys"] = user_api_keys
 
     print(f"[LLM] Calling model={model} tools={len(tools) if tools else 0} msgs={len(messages)}", flush=True)
 

@@ -19,6 +19,7 @@ from src.orchestrator.tool_executor import ToolExecutor
 from src.orchestrator.safety import get_safety
 from src.prompts.mode_classifier import classify_mode
 from src.prompts.router import get_router
+from src.services.auth.integration_client import get_user_api_keys
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,27 @@ class Orchestrator:
         self.context: Optional[Dict[str, Any]] = None
         self.safety = get_safety()
         self._progress_queue: Optional[asyncio.Queue] = None
+        self._user_api_keys: Optional[Dict[str, str]] = None
 
     async def initialize_session(self):
         self.context = await fetch_workspace_context(self.workspace_id, user_id=self.user_id)
+        # Fetch BYOK keys so LLM calls use user's own API keys when available
+        if self._user_api_keys is None:
+            try:
+                keys_resp = await get_user_api_keys(self.user_id)
+                raw_keys = keys_resp.get("keys", [])
+                byok = {}
+                for k in raw_keys:
+                    provider = (k.get("provider") or "").lower()
+                    api_key = k.get("api_key") or k.get("key") or ""
+                    if provider and api_key:
+                        byok[provider] = api_key
+                self._user_api_keys = byok if byok else None
+                if byok:
+                    logger.info(f"[Orch] Loaded BYOK keys for providers: {list(byok.keys())}")
+            except Exception as e:
+                logger.warning(f"[Orch] Failed to load BYOK keys: {e}")
+                self._user_api_keys = None
         return self.context
 
     def _build_context_block(self) -> str:
@@ -226,6 +245,7 @@ class Orchestrator:
                     model="groq/llama-3.3-70b-versatile",
                     temperature=0.5,
                     max_tokens=MAX_TOKENS,
+                    user_api_keys=self._user_api_keys,
                 )
             except Exception as e:
                 logger.error(f"LLM call failed iteration {iteration}: {e}")
@@ -333,6 +353,7 @@ class Orchestrator:
                             model="groq/llama-3.3-70b-versatile",
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
+                            user_api_keys=self._user_api_keys,
                         )
                         summary_text = summary_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
                         if summary_text:
@@ -362,6 +383,7 @@ class Orchestrator:
                             model="groq/llama-3.3-70b-versatile",
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
+                            user_api_keys=self._user_api_keys,
                         )
                         err_text = err_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
                         if err_text:

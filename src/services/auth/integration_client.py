@@ -1,5 +1,6 @@
 """Integration Client — OAuth status, connect buttons via auth_service"""
 import logging
+import os
 from typing import Dict, List
 
 import httpx
@@ -7,6 +8,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 AUTH_URL = "http://auth_service:8000"
+_INTERNAL_KEY = os.getenv("AUTH_INTERNAL_SERVICE_KEY", "rg-internal-service-key-2025")
 
 
 async def get_integrations(user_id: str, token: str = "") -> Dict:
@@ -77,10 +79,12 @@ def check_required_integrations(agent_tools: List[str], connected: List[str]) ->
 async def get_user_api_keys(user_id: str) -> Dict:
     """Get user's API keys for external services."""
     try:
+        headers = {"x-internal-service-key": _INTERNAL_KEY}
         async with httpx.AsyncClient(timeout=10.0) as c:
-            r = await c.get(f"{AUTH_URL}/auth/internal/user-api-keys/{user_id}")
+            r = await c.get(f"{AUTH_URL}/auth/internal/user-api-keys/{user_id}", headers=headers)
             if r.status_code == 200:
                 return r.json()
+            logger.warning(f"[Auth] get user api keys returned {r.status_code}")
     except Exception as e:
         logger.warning(f"[Auth] get user api keys failed: {e}")
     return {"keys": []}
