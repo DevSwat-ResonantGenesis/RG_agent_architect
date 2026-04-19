@@ -204,7 +204,7 @@ class Builder:
                 f"User wants to change:\n{message}\n\n"
                 "Output the FULL updated instruction block."
             )}
-        ], model=REASONING_MODEL, max_tokens=2048)
+        ], model=REASONING_MODEL, max_tokens=8192)
         new_prompt = resp.get("choices", [{}])[0].get("message", {}).get("content", current)
         save_result = await self.ws_db.save_agent(
             agent_id=agent_id, name=agent["name"], goal=agent["goal"],
@@ -280,7 +280,7 @@ class Builder:
         resp = await call_llm(messages=[
             {"role": "system", "content": BUILDER_SYSTEM},
             {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}"}
-        ], model=REASONING_MODEL, max_tokens=2048, temperature=0.4)
+        ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4)
         content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not content:
             content = (f"ROLE: Autonomous agent\nGOAL: {goal}\nSTEPS:\n"

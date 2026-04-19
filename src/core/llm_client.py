@@ -26,7 +26,7 @@ async def call_llm(
     tools: Optional[List[Dict]] = None,
     model: str = DEFAULT_MODEL,
     temperature: float = 0.6,
-    max_tokens: int = 4096,
+    max_tokens: int = 16000,
 ) -> Dict[str, Any]:
     """Single entry point — everything goes through the unified LLM service."""
     body: Dict[str, Any] = {

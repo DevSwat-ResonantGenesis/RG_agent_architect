@@ -19,7 +19,7 @@ ED_SERVICE_URL = os.getenv("ED_SERVICE_URL", "http://ed_service:8000")
 
 # ── Orchestrator tuning ──
 ORCHESTRATOR_MAX_ITERATIONS = 8
-MAX_TOKENS = 4000
+MAX_TOKENS = 16000
 HISTORY_DEPTH = 10
 POLL_MAX_ROUNDS = 40
 POLL_INTERVAL = 5
@@ -27,10 +27,10 @@ TIMEOUT = 180
 BUILDER_MAX_LOOPS = 30
 
 TASK_PROFILES = {
-    "simple":   {"max_loops": 20, "temperature": 0.4, "model": "groq/llama-3.3-70b-versatile", "max_tokens": 30000, "max_credits": 50},
-    "medium":   {"max_loops": 35, "temperature": 0.55, "model": "groq/llama-3.3-70b-versatile", "max_tokens": 50000, "max_credits": 100},
-    "complex":  {"max_loops": 45, "temperature": 0.65, "model": "openai/gpt-4o", "max_tokens": 80000, "max_credits": 200},
-    "creative": {"max_loops": 25, "temperature": 0.75, "model": "groq/llama-3.3-70b-versatile", "max_tokens": 50000, "max_credits": 100},
+    "simple":   {"max_loops": 20, "temperature": 0.4, "model": "groq/llama-3.3-70b-versatile", "max_tokens": 60000, "max_credits": 50},
+    "medium":   {"max_loops": 35, "temperature": 0.55, "model": "groq/llama-3.3-70b-versatile", "max_tokens": 100000, "max_credits": 100},
+    "complex":  {"max_loops": 45, "temperature": 0.65, "model": "openai/gpt-4o", "max_tokens": 128000, "max_credits": 200},
+    "creative": {"max_loops": 25, "temperature": 0.75, "model": "groq/llama-3.3-70b-versatile", "max_tokens": 100000, "max_credits": 100},
 }
 
 PLANS = {

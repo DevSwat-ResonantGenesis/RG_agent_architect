@@ -73,7 +73,7 @@ class Runner:
             {"role": "system", "content": agent["system_prompt"]},
         ]
         if past_context:
-            messages.append({"role": "system", "content": f"Past learnings from previous runs:\n{str(past_context)[:2000]}"})
+            messages.append({"role": "system", "content": f"Past learnings from previous runs:\n{str(past_context)[:8000]}"})
         messages.append({"role": "user", "content": f"Execute this goal now: {goal}"})
         all_tool_calls = []
         errors = []
@@ -84,7 +84,7 @@ class Runner:
         try:
             for loop in range(max_loops):
                 resp = await call_llm(messages=messages, tools=RUNNER_TOOLS,
-                                      model=model, temperature=temp, max_tokens=4096)
+                                      model=model, temperature=temp, max_tokens=16000)
                 choice = resp.get("choices", [{}])[0]
                 msg = choice.get("message", {})
                 content = msg.get("content", "")
