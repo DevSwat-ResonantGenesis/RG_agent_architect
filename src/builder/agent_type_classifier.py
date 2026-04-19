@@ -20,7 +20,6 @@ import asyncio
 import json
 import logging
 import os
-import pickle
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,12 +27,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "agent_type_classifier.pkl"
-)
-ACTIVE_SAMPLES_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "agent_type_active_samples.jsonl"
-)
+MODEL_NAME = "agent_type_classifier"
 
 
 class AgentTypeClassifier:
@@ -62,23 +56,22 @@ class AgentTypeClassifier:
                 if not ok:
                     return False
 
-                # Try loading saved model
-                if os.path.exists(MODEL_PATH):
-                    try:
-                        with open(MODEL_PATH, "rb") as f:
-                            saved = pickle.load(f)
-                        self._classifier = saved["classifier"]
-                        self._label_names = saved["label_names"]
+                # Try loading from external DB
+                from src.services import ml_model_store as store
+                if store.is_available():
+                    await store.ensure_tables()
+                    saved = await store.load_model(MODEL_NAME)
+                    if saved:
+                        self._classifier = saved["model"]["classifier"]
+                        self._label_names = saved["model"]["label_names"]
                         self._stats = saved.get("stats", {})
                         self._is_trained = True
                         logger.info(
-                            f"[AgentTypeClassifier] Loaded from disk — "
+                            f"[AgentTypeClassifier] Loaded from DB — "
                             f"accuracy={self._stats.get('accuracy', '?')}, "
                             f"labels={self._label_names}"
                         )
                         return True
-                    except Exception as e:
-                        logger.warning(f"[AgentTypeClassifier] Disk load failed: {e}")
 
                 # Train from seed
                 logger.info("[AgentTypeClassifier] No saved model, training from seed...")
@@ -165,21 +158,20 @@ class AgentTypeClassifier:
         return self._stats
 
     async def _train_and_save(self) -> Dict[str, Any]:
-        """Train from seed + active data and persist."""
+        """Train from seed + active data and persist to external DB."""
         from src.builder.agent_type_training_data import get_training_data
         samples = get_training_data()
 
-        # Merge active learning samples
-        if os.path.exists(ACTIVE_SAMPLES_PATH):
+        # Merge active learning samples from DB
+        from src.services import ml_model_store as store
+        if store.is_available():
             try:
-                with open(ACTIVE_SAMPLES_PATH, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            s = json.loads(line)
-                            if s.get("confidence", 0) > 0.6:
-                                samples.append((s["goal"], s["predicted_type"]))
-                logger.info(f"[AgentTypeClassifier] Loaded active samples, total={len(samples)}")
+                active_rows = await store.load_active_samples(MODEL_NAME, min_confidence=0.6)
+                for s in active_rows:
+                    if s.get("goal") and s.get("predicted_type"):
+                        samples.append((s["goal"], s["predicted_type"]))
+                if active_rows:
+                    logger.info(f"[AgentTypeClassifier] Added {len(active_rows)} active samples from DB")
             except Exception as e:
                 logger.warning(f"[AgentTypeClassifier] Active sample load failed: {e}")
 
@@ -187,18 +179,15 @@ class AgentTypeClassifier:
             None, self._train_on_samples, samples
         )
 
-        # Save
-        try:
-            os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-            with open(MODEL_PATH, "wb") as f:
-                pickle.dump({
-                    "classifier": self._classifier,
-                    "label_names": self._label_names,
-                    "stats": self._stats,
-                }, f)
-            logger.info(f"[AgentTypeClassifier] Model saved to {MODEL_PATH}")
-        except Exception as e:
-            logger.warning(f"[AgentTypeClassifier] Save failed: {e}")
+        # Save to external DB
+        if store.is_available():
+            await store.save_model(
+                MODEL_NAME,
+                {"classifier": self._classifier, "label_names": self._label_names},
+                self._stats,
+            )
+        else:
+            logger.warning("[AgentTypeClassifier] No DATABASE_URL — model NOT persisted")
 
         return stats
 
@@ -255,14 +244,22 @@ class AgentTypeClassifier:
     def _flush_samples(self):
         if not self._pending_samples:
             return
-        try:
-            os.makedirs(os.path.dirname(ACTIVE_SAMPLES_PATH), exist_ok=True)
-            with open(ACTIVE_SAMPLES_PATH, "a") as f:
-                for s in self._pending_samples:
-                    f.write(json.dumps(s) + "\n")
-        except Exception as e:
-            logger.warning(f"[AgentTypeClassifier] Flush failed: {e}")
+        samples_to_flush = list(self._pending_samples)
         self._pending_samples.clear()
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._flush_samples_async(samples_to_flush))
+            else:
+                asyncio.run(self._flush_samples_async(samples_to_flush))
+        except Exception as e:
+            logger.warning(f"[AgentTypeClassifier] Flush scheduling failed: {e}")
+
+    async def _flush_samples_async(self, samples: List[Dict]) -> None:
+        from src.services import ml_model_store as store
+        if store.is_available():
+            await store.save_active_samples(MODEL_NAME, samples)
+            logger.info(f"[AgentTypeClassifier] Flushed {len(samples)} active samples to DB")
 
     async def retrain(self) -> Dict[str, Any]:
         self._flush_samples()

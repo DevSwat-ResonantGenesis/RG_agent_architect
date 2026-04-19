@@ -16,7 +16,6 @@ import importlib
 import json
 import logging
 import os
-import pickle
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -25,12 +24,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "prompt_classifier.pkl"
-)
-ACTIVE_SAMPLES_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "prompt_active_samples.jsonl"
-)
+MODEL_NAME = "prompt_classifier"
 
 
 # ── Prompt Module Definition ──
@@ -117,22 +111,21 @@ class PromptClassifier:
 
                 self._module_ids = _get_non_base_module_ids()
 
-                # Try loading from disk
-                if os.path.exists(MODEL_PATH):
-                    try:
-                        with open(MODEL_PATH, "rb") as f:
-                            saved = pickle.load(f)
-                        self._classifiers = saved["classifiers"]
+                # Try loading from external DB
+                from src.services import ml_model_store as store
+                if store.is_available():
+                    await store.ensure_tables()
+                    saved = await store.load_model(MODEL_NAME)
+                    if saved:
+                        self._classifiers = saved["model"]["classifiers"]
                         self._stats = saved.get("stats", {})
                         self._is_trained = True
                         logger.info(
-                            f"[PromptRouter] Loaded trained model from disk "
+                            f"[PromptRouter] Loaded from DB "
                             f"({len(self._classifiers)} classifiers, "
                             f"acc={self._stats.get('mean_accuracy', '?')})"
                         )
                         return True
-                    except Exception as e:
-                        logger.warning(f"[PromptRouter] Disk load failed: {e}")
 
                 # No saved model — train from seed
                 logger.info("[PromptRouter] No saved model, training from seed...")
@@ -226,24 +219,20 @@ class PromptClassifier:
         return self._stats
 
     async def _train_and_save(self) -> Dict[str, Any]:
-        """Train from seed data + active samples and save to disk."""
+        """Train from seed data + active samples and save to external DB."""
         from src.prompts.training_data import get_training_data
         samples = get_training_data()
 
-        # Load active learning samples
-        if os.path.exists(ACTIVE_SAMPLES_PATH):
+        # Load active learning samples from DB
+        from src.services import ml_model_store as store
+        if store.is_available():
             try:
-                active = []
-                with open(ACTIVE_SAMPLES_PATH, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            s = json.loads(line)
-                            if s.get("confidence", 0) > 0.5:
-                                active.append((s["message"], s["predicted_modules"]))
-                if active:
-                    samples.extend(active)
-                    logger.info(f"[PromptRouter] Added {len(active)} active samples")
+                active_rows = await store.load_active_samples(MODEL_NAME, min_confidence=0.5)
+                for s in active_rows:
+                    if s.get("message") and s.get("predicted_modules"):
+                        samples.append((s["message"], s["predicted_modules"]))
+                if active_rows:
+                    logger.info(f"[PromptRouter] Added {len(active_rows)} active samples from DB")
             except Exception as e:
                 logger.warning(f"[PromptRouter] Active sample load failed: {e}")
 
@@ -251,17 +240,15 @@ class PromptClassifier:
             None, self._train_on_samples, samples
         )
 
-        # Save to disk
-        try:
-            os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-            with open(MODEL_PATH, "wb") as f:
-                pickle.dump({
-                    "classifiers": self._classifiers,
-                    "stats": self._stats,
-                }, f)
-            logger.info(f"[PromptRouter] Model saved to {MODEL_PATH}")
-        except Exception as e:
-            logger.warning(f"[PromptRouter] Model save failed: {e}")
+        # Save to external DB
+        if store.is_available():
+            await store.save_model(
+                MODEL_NAME,
+                {"classifiers": self._classifiers},
+                self._stats,
+            )
+        else:
+            logger.warning("[PromptRouter] No DATABASE_URL — model NOT persisted")
 
         return stats
 
@@ -295,18 +282,29 @@ class PromptClassifier:
             self._flush_samples()
 
     def _flush_samples(self) -> None:
-        """Write pending samples to JSONL file for active learning."""
+        """Write pending samples to external DB for active learning."""
         if not self._pending_samples:
             return
-        try:
-            os.makedirs(os.path.dirname(ACTIVE_SAMPLES_PATH), exist_ok=True)
-            with open(ACTIVE_SAMPLES_PATH, "a") as f:
-                for s in self._pending_samples:
-                    f.write(json.dumps(s) + "\n")
-            logger.info(f"[PromptRouter] Flushed {len(self._pending_samples)} active samples")
-        except Exception as e:
-            logger.warning(f"[PromptRouter] Sample flush failed: {e}")
+        samples_to_flush = list(self._pending_samples)
         self._pending_samples.clear()
+        # Schedule async DB write
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._flush_samples_async(samples_to_flush))
+            else:
+                asyncio.run(self._flush_samples_async(samples_to_flush))
+        except Exception as e:
+            logger.warning(f"[PromptRouter] Sample flush scheduling failed: {e}")
+
+    async def _flush_samples_async(self, samples: List[Dict]) -> None:
+        """Async flush to DB."""
+        from src.services import ml_model_store as store
+        if store.is_available():
+            await store.save_active_samples(MODEL_NAME, samples)
+            logger.info(f"[PromptRouter] Flushed {len(samples)} active samples to DB")
+        else:
+            logger.warning("[PromptRouter] No DATABASE_URL — active samples NOT persisted")
 
     async def retrain(self) -> Dict[str, Any]:
         """Retrain model using seed + all active learning data."""

@@ -13,13 +13,19 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(mes
 from src.orchestrator.orchestrator import Orchestrator
 from src.prompts.router import preload_prompt_router, get_router
 from src.builder.agent_type_classifier import preload_agent_type_classifier, get_agent_type_classifier
+from src.services import ml_model_store
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Pre-train/load neural classifiers on startup."""
+    """Initialize DB tables, then pre-train/load neural classifiers on startup."""
+    if ml_model_store.is_available():
+        await ml_model_store.ensure_tables()
+        logger.info("[Startup] ML model DB tables ready")
+    else:
+        logger.warning("[Startup] No DATABASE_URL — ML models will NOT persist across restarts")
     await preload_prompt_router()
     await preload_agent_type_classifier()
     yield

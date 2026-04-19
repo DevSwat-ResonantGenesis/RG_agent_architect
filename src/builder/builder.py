@@ -20,23 +20,6 @@ from src.builder.specialised_prompt_writer import get_specialised_builder_prompt
 
 logger = logging.getLogger(__name__)
 
-BUILDER_SYSTEM = """You are an expert agent builder. Given a goal, generate precise step-by-step instructions for an autonomous agent.
-Output ONLY the instruction block — no preamble, no explanation.
-Format:
-ROLE: (one-line role description)
-GOAL: (restate the goal clearly)
-STEPS:
-1. (specific action with tool name if applicable)
-2. ...
-3. ...
-4. ...
-CONSTRAINTS:
-- Maximum 50 results unless user specifies otherwise
-- Always include source URLs for scraped/searched data
-- Never hallucinate data — only use tool outputs
-- Store results in agent database
-OUTPUT FORMAT: (describe expected output structure)"""
-
 # Tools that can be tested with a quick dry-run
 TESTABLE_TOOLS = {
     "web_search": {"query": "test", "context": "verification"},
@@ -218,8 +201,21 @@ class Builder:
         if not agent:
             return {"error": "Agent not found", "outcome": "FAIL"}
         current = agent.get("system_prompt", "")
+        goal = agent.get("goal", "")
+        tools = agent.get("tools", [])
+
+        # Use neural classifier to get specialised builder prompt
+        classifier = get_agent_type_classifier()
+        try:
+            await classifier.ensure_ready()
+            result = classifier.classify(goal, tools)
+            agent_type = result["type"]
+        except Exception:
+            agent_type = fallback_classify(goal)
+        builder_system = get_specialised_builder_prompt(agent_type)
+
         resp = await call_llm(messages=[
-            {"role": "system", "content": BUILDER_SYSTEM},
+            {"role": "system", "content": builder_system},
             {"role": "user", "content": (
                 f"Current instructions:\n{current}\n\n"
                 f"User wants to change:\n{message}\n\n"
