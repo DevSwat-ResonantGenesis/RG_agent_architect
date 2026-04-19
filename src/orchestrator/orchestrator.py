@@ -44,16 +44,34 @@ class Orchestrator:
         return self.context
 
     def _build_context_block(self) -> str:
-        """Build a context summary so the LLM knows the current workspace state."""
+        """Build a context summary so the LLM knows the current workspace state.
+        
+        The context block is THE source of truth. The LLM should answer
+        questions from this data without needing to call workspace_snapshot.
+        """
         if not self.context:
             return ""
         parts = []
         ws = self.context.get("workspace", {})
         agents = ws.get("agents", [])
+
+        # Prominent count header so LLM can answer "how many" instantly
+        parts.append(f"TOTAL AGENTS: {len(agents)}")
+
         if agents:
             lines = []
+            default_icon = "🤖"
             for a in agents:
-                lines.append(f"  {a.get('icon','🤖')} {a['name']} (id:{a['id']}) — {a.get('goal','')}")
+                icon = a.get('icon', default_icon)
+                name = a.get('name', '?')
+                aid = a.get('id', '?')
+                goal = a.get('goal', 'no goal')
+                status = a.get('status', 'active')
+                tools_list = a.get('tools', [])
+                tool_count = len(tools_list) if isinstance(tools_list, list) else 0
+                lines.append(
+                    f"  {icon} {name} (id:{aid}) — {goal} | tools:{tool_count} | status:{status}"
+                )
             parts.append("AGENTS:\n" + "\n".join(lines))
         else:
             parts.append("WORKSPACE: empty, no agents yet.")
@@ -61,7 +79,7 @@ class Orchestrator:
         tools = self.context.get("tools", [])
         builtin = [t["name"] for t in tools if t.get("category") == "builtin"]
         if builtin:
-            parts.append(f"TOOLS: {', '.join(builtin)}")
+            parts.append(f"AVAILABLE TOOLS: {', '.join(builtin)}")
 
         integrations = self.context.get("integrations", {})
         connected = integrations.get("connected", [])
