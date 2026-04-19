@@ -15,6 +15,8 @@ from src.services.database.workspace_db import WorkspaceDB
 from src.services.blockchain import chain_client
 from src.services.billing import billing_client
 from src.services.memory.memory_store import MemoryStore
+from src.builder.agent_type_classifier import get_agent_type_classifier, fallback_classify
+from src.builder.specialised_prompt_writer import get_specialised_builder_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -100,15 +102,21 @@ class Builder:
         except Exception as e:
             logger.warning(f"[Builder] Credit check failed (proceeding): {e}")
 
-        # ── PHASE 1: Generate instructions ──
-        await self._emit("planning", f"Generating instructions for '{name}'...")
+        # ── PHASE 1: Neural type classification + specialised instruction generation ──
+        await self._emit("planning", f"Classifying agent type and generating specialised instructions for '{name}'...")
+        self._last_agent_type = "general"
+        self._last_type_confidence = 0.0
         try:
             instructions = await self._generate_instructions(goal, resolved_tools)
         except Exception as e:
             logger.error(f"[Builder] Instruction generation failed: {e}")
             return {"error": f"Failed to generate instructions: {e}", "outcome": "FAIL"}
-        await self._emit("planning", "Instructions generated",
-                         {"instructions_preview": instructions[:200]})
+        await self._emit("planning",
+                         f"Instructions generated (type={self._last_agent_type}, "
+                         f"conf={self._last_type_confidence:.2f})",
+                         {"instructions_preview": instructions[:200],
+                          "agent_type": self._last_agent_type,
+                          "type_confidence": self._last_type_confidence})
 
         # ── PHASE 2: Save agent to Agent Engine DB ──
         await self._emit("saving", f"Saving agent '{name}' to Agent Engine...")
@@ -289,14 +297,43 @@ class Builder:
         return None
 
     async def _generate_instructions(self, goal: str, tools: list) -> str:
+        """Generate agent instructions using neural type classification.
+
+        Flow:
+        1. AgentTypeClassifier identifies the agent type from goal + tools
+        2. SpecialisedPromptWriter provides a type-specific builder prompt
+        3. LLM generates far better instructions using domain expertise
+        """
         tool_list = ", ".join(tools) if tools else "web_search, fetch_url"
+
+        # ── Neural agent type classification ──
+        classifier = get_agent_type_classifier()
+        try:
+            await classifier.ensure_ready()
+            result = classifier.classify(goal, tools)
+            agent_type = result["type"]
+            confidence = result["confidence"]
+            logger.info(
+                f"[Builder] Agent type classified: {agent_type} "
+                f"(conf={confidence:.3f}) for goal={goal[:60]!r}"
+            )
+        except Exception as e:
+            logger.warning(f"[Builder] Neural classifier failed, using fallback: {e}")
+            agent_type = fallback_classify(goal)
+            confidence = 0.0
+
+        # ── Get specialised builder prompt for this type ──
+        builder_system = get_specialised_builder_prompt(agent_type)
+        self._last_agent_type = agent_type
+        self._last_type_confidence = confidence
+
         resp = await call_llm(messages=[
-            {"role": "system", "content": BUILDER_SYSTEM},
+            {"role": "system", "content": builder_system},
             {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}"}
         ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4)
         content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not content:
-            content = (f"ROLE: Autonomous agent\nGOAL: {goal}\nSTEPS:\n"
+            content = (f"ROLE: Autonomous {agent_type} agent\nGOAL: {goal}\nSTEPS:\n"
                        f"1. Use {tool_list} to gather data\n"
                        f"2. Process and analyze results\n"
                        f"3. Store output in agent database\n"

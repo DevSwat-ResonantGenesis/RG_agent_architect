@@ -12,14 +12,16 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(mes
 
 from src.orchestrator.orchestrator import Orchestrator
 from src.prompts.router import preload_prompt_router, get_router
+from src.builder.agent_type_classifier import preload_agent_type_classifier, get_agent_type_classifier
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Pre-train/load the neural prompt classifier on startup."""
+    """Pre-train/load neural classifiers on startup."""
     await preload_prompt_router()
+    await preload_agent_type_classifier()
     yield
 
 app = FastAPI(title="Resonant Agent Architect", version="2.0.0", lifespan=lifespan)
@@ -137,3 +139,30 @@ async def prompt_router_retrain():
     router = get_router()
     stats = await router.retrain()
     return {"status": "retrained", "stats": stats}
+
+
+@app.get("/api/agent-type-classifier/stats")
+async def agent_type_classifier_stats():
+    """Get agent type classifier statistics."""
+    clf = get_agent_type_classifier()
+    return clf.get_stats()
+
+
+@app.post("/api/agent-type-classifier/retrain")
+async def agent_type_classifier_retrain():
+    """Retrain agent type classifier with accumulated active learning data."""
+    clf = get_agent_type_classifier()
+    stats = await clf.retrain()
+    return {"status": "retrained", "stats": stats}
+
+
+@app.post("/api/agent-type-classifier/classify")
+async def classify_agent_type(req: dict):
+    """Classify an agent type from goal + tools (for testing/debugging)."""
+    clf = get_agent_type_classifier()
+    await clf.ensure_ready()
+    result = clf.classify(
+        goal=req.get("goal", ""),
+        tools=req.get("tools"),
+    )
+    return result
