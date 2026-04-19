@@ -49,6 +49,7 @@ class MessageRequest(BaseModel):
     user_id: str = ""
     context: str = ""  # previous assistant content (backward compat)
     conversation_history: List[Dict] = []  # [{"role": "user", "content": "..."}]
+    user_api_keys: Dict = {}  # BYOK keys forwarded from chat service
 
 class RunEventRequest(BaseModel):
     workspace_id: str
@@ -82,6 +83,8 @@ def _inject_conversation_history(orch: Orchestrator, req: MessageRequest):
 async def handle_message(req: MessageRequest):
     """Synchronous JSON response (backward compatible)."""
     orch = get_orchestrator(req.workspace_id, req.user_id)
+    if req.user_api_keys:
+        orch._user_api_keys = req.user_api_keys
     _inject_conversation_history(orch, req)
     return await orch.handle_message(req.message)
 
@@ -94,6 +97,8 @@ async def handle_message_stream(req: MessageRequest):
                  summarizing, error, complete
     """
     orch = get_orchestrator(req.workspace_id, req.user_id)
+    if req.user_api_keys:
+        orch._user_api_keys = req.user_api_keys
     _inject_conversation_history(orch, req)
 
     async def event_generator():

@@ -1,16 +1,12 @@
-"""LLM Client — ALL calls route through the unified LLM service.
+"""LLM Client — ALL calls route through UnifiedLLMClient.
 
-No direct Groq/OpenAI calls. No duplicate API keys.
-The unified service handles routing, BYOK, billing, and fallback.
-Tool-calling goes through the multi_router which passes tools to
-Groq/OpenAI natively.
+Uses the shared rg_llm library directly (mounted at /app/rg_llm).
+Handles multi-provider fallback, BYOK keys, streaming, and tool calling.
 """
 import logging
 from typing import Any, Dict, List, Optional
 
-import httpx
-
-from src.core.config import LLM_SERVICE_URL
+from rg_llm import UnifiedLLMClient, LLMRequest
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +14,15 @@ DEFAULT_MODEL = "groq/llama-3.3-70b-versatile"
 FAST_MODEL = "groq/llama-3.1-8b-instant"
 REASONING_MODEL = "openai/gpt-4o"
 
-_URL = f"{LLM_SERVICE_URL}/llm/chat/completions"
+_client = UnifiedLLMClient()
+
+
+def _parse_provider_model(model_str: str):
+    """Parse 'provider/model' format into (provider, model) tuple."""
+    if "/" in model_str:
+        provider, model = model_str.split("/", 1)
+        return provider, model
+    return None, model_str
 
 
 async def call_llm(
@@ -29,49 +33,53 @@ async def call_llm(
     max_tokens: int = 16000,
     user_api_keys: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Single entry point — everything goes through the unified LLM service."""
-    body: Dict[str, Any] = {
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
+    """Single entry point for all LLM calls in agent_architect.
 
-    body["model"] = model
-    if tools:
-        body["tools"] = tools
-        body["tool_choice"] = "auto"
-    if user_api_keys:
-        body["user_api_keys"] = user_api_keys
+    Returns OpenAI-compatible dict with choices[0].message for backward compat.
+    """
+    provider, model_name = _parse_provider_model(model)
 
     print(f"[LLM] Calling model={model} tools={len(tools) if tools else 0} msgs={len(messages)}", flush=True)
 
+    request = LLMRequest(
+        messages=messages,
+        provider=provider,
+        model=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+    )
+
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(_URL, json=body)
-            if resp.status_code != 200:
-                print(f"[LLM] ERROR {resp.status_code}: {resp.text[:300]}", flush=True)
-                logger.error(f"[LLM] {resp.status_code}: {resp.text[:500]}")
-            resp.raise_for_status()
-            data = resp.json()
-            normalized = _normalize_response(data)
-            tc = normalized.get("choices", [{}])[0].get("message", {}).get("tool_calls")
-            print(f"[LLM] Response: tool_calls={len(tc) if tc else 0}, content_len={len(normalized.get('choices', [{}])[0].get('message', {}).get('content', '') or '')}", flush=True)
-            return normalized
+        response = await _client.complete(request, user_keys=user_api_keys)
     except Exception as e:
         logger.error(f"[LLM] call failed: {e}")
         raise
 
+    # Build OpenAI-compatible response dict for backward compat
+    message: Dict[str, Any] = {"role": "assistant", "content": response.content or ""}
+    if response.tool_calls:
+        message["tool_calls"] = [
+            {
+                "id": tc.id or f"call_{i}",
+                "type": "function",
+                "function": {"name": tc.name, "arguments": tc.arguments},
+            }
+            for i, tc in enumerate(response.tool_calls)
+        ]
 
-def _normalize_response(data: Dict) -> Dict:
-    """Ensure tool_calls are inside message (raw OpenAI format).
+    result = {
+        "choices": [{"message": message, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": response.usage.get("prompt_tokens", 0) if response.usage else 0,
+            "completion_tokens": response.usage.get("completion_tokens", 0) if response.usage else 0,
+            "total_tokens": response.usage.get("total_tokens", 0) if response.usage else 0,
+        },
+        "provider": response.provider or "",
+        "model": response.model or model_name,
+    }
 
-    The unified service may return tool_calls at the choice level
-    (ChatCompletionChoice.tool_calls) instead of inside message.
-    The orchestrator expects them in message, so we normalize here.
-    """
-    for choice in data.get("choices", []):
-        tc = choice.pop("tool_calls", None)
-        if tc and "message" in choice:
-            if not choice["message"].get("tool_calls"):
-                choice["message"]["tool_calls"] = tc
-    return data
+    tc_count = len(response.tool_calls) if response.tool_calls else 0
+    content_len = len(response.content or "")
+    print(f"[LLM] Response via {response.provider}/{response.model}: tool_calls={tc_count}, content_len={content_len}", flush=True)
+    return result

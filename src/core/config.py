@@ -3,7 +3,6 @@ import os
 
 # ── Infrastructure URLs (full platform access) ──
 AGENT_ENGINE_URL = os.getenv("AGENT_ENGINE_URL", "http://agent_engine_service:8000")
-LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://llm_service:8000")
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory_service:8000")
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth_service:8000")
 BILLING_SERVICE_URL = os.getenv("BILLING_SERVICE_URL", "http://billing_service:8000")
