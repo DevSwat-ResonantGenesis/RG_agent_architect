@@ -159,10 +159,31 @@ class Orchestrator:
     # ── Core loop ──
 
     async def _run_loop(self, mode: OperationMode) -> Dict[str, Any]:
+        # Always refresh workspace context before each loop — prevents stale state
+        try:
+            await self.initialize_session()
+        except Exception as e:
+            logger.warning(f"[Orch] context refresh failed: {e}")
+
         context_block = self._build_context_block()
         system_content = PLATFORM_PROMPT
         if context_block:
             system_content += f"\n<context>\n{context_block}\n</context>"
+
+        # Inject mode-specific guidance so the LLM doesn't skip brainstorming
+        if mode == OperationMode.BRAINSTORM:
+            system_content += (
+                "\n<mode_override>\nThe user's message is exploratory — they do NOT have a specific agent goal yet. "
+                "Do NOT call build_agent. Instead: ask what problem they want to solve, paint a concrete "
+                "picture of what an agent could do, and confirm before building. Use present_options "
+                "to offer 2-3 specific agent ideas based on the conversation.\n</mode_override>"
+            )
+        elif mode == OperationMode.DIAGNOSE:
+            system_content += (
+                "\n<mode_override>\nThe user suspects something is broken. Investigate before acting. "
+                "Call workspace_snapshot and agent_snapshot first. Analyze run history, tool failures, "
+                "and config issues. Explain WHY something failed before proposing a fix.\n</mode_override>"
+            )
 
         messages = [{"role": "system", "content": system_content}]
         messages.extend(self.history)

@@ -18,6 +18,7 @@ class OperationMode(str, Enum):
     BRAINSTORM = "brainstorm"
     CONTROL = "control"
     REVIEW = "review"
+    DIAGNOSE = "diagnose"
 
 
 @dataclass

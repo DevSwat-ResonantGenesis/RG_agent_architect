@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Dict, List, Optional
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
@@ -30,6 +30,8 @@ class MessageRequest(BaseModel):
     workspace_id: str
     message: str
     user_id: str = ""
+    context: str = ""  # previous assistant content (backward compat)
+    conversation_history: List[Dict] = []  # [{"role": "user", "content": "..."}]
 
 class RunEventRequest(BaseModel):
     workspace_id: str
@@ -45,10 +47,25 @@ def get_orchestrator(workspace_id: str, user_id: str = "") -> Orchestrator:
     return orchestrators[workspace_id]
 
 
+def _inject_conversation_history(orch: Orchestrator, req: MessageRequest):
+    """Inject chat conversation history into the orchestrator so it has context.
+    Only injects on first message (empty history) to avoid duplication."""
+    if not orch.history and req.conversation_history:
+        for msg in req.conversation_history:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role in ("user", "assistant") and content:
+                orch.history.append({"role": role, "content": content[:500]})
+    elif not orch.history and req.context:
+        # Backward compat: inject prev_assistant_content as single context message
+        orch.history.append({"role": "assistant", "content": req.context[:1000]})
+
+
 @app.post("/api/message")
 async def handle_message(req: MessageRequest):
     """Synchronous JSON response (backward compatible)."""
     orch = get_orchestrator(req.workspace_id, req.user_id)
+    _inject_conversation_history(orch, req)
     return await orch.handle_message(req.message)
 
 
@@ -60,6 +77,7 @@ async def handle_message_stream(req: MessageRequest):
                  summarizing, error, complete
     """
     orch = get_orchestrator(req.workspace_id, req.user_id)
+    _inject_conversation_history(orch, req)
 
     async def event_generator():
         try:

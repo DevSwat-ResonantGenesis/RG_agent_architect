@@ -68,10 +68,24 @@ class Builder:
                     tools: list = None, max_loops: int = 30,
                     temperature: float = 0.5,
                     model: str = "groq/llama-3.3-70b-versatile") -> Dict[str, Any]:
-        agent_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         resolved_tools = tools or ["web_search", "fetch_url"]
+
+        # ── PHASE 0: Duplicate detection ──
+        # Check if agent with same name already exists — modify instead of duplicate
+        existing = await self._find_agent_by_name(name)
+        if existing:
+            existing_id = existing.get("id", "")
+            await self._emit("duplicate", f"Agent '{name}' already exists (ID: {existing_id}). Updating instead of creating duplicate.")
+            logger.info(f"[Builder] Duplicate detected: '{name}' exists as {existing_id}, modifying")
+            return await self.modify_agent(
+                existing_id,
+                add_tools=[t for t in resolved_tools if t not in (existing.get("tools") or [])],
+                goal=goal, max_loops=max_loops, temperature=temperature, model=model,
+            )
+
+        agent_id = str(uuid.uuid4())
 
         # ── PHASE 1: Generate instructions ──
         await self._emit("planning", f"Generating instructions for '{name}'...")
@@ -122,10 +136,16 @@ class Builder:
                           "wallet": wallet_addr[:16] if wallet_addr else ""})
 
         # ── PHASE 5: Store build run record ──
-        await self.ws_db.save_run(
+        run_result = await self.ws_db.save_run(
             run_id=run_id, agent_id=agent_id, outcome="SUCCESS",
             summary=f"Built agent: {name}", loop_count=1,
             started_at=now, finished_at=datetime.now(timezone.utc))
+        if not run_result.get("saved", False):
+            run_error = run_result.get("error", "unknown")
+            logger.warning(f"[Builder] save_run failed for '{name}': {run_error}")
+            # Agent was created but run record failed (e.g. credits issue)
+            # Don't block — agent exists, just note the issue
+            await self._emit("warning", f"Agent created but run record failed: {run_error}")
 
         # ── PHASE 6: Test tools (quick verification) ──
         await self._emit("testing", "Testing agent tools...")
@@ -241,6 +261,19 @@ class Builder:
         }
 
     # ── Internal helpers ──
+
+    async def _find_agent_by_name(self, name: str) -> Optional[Dict]:
+        """Check if an agent with this name already exists in the workspace."""
+        try:
+            snapshot = await self.ws_db.get_snapshot()
+            agents = snapshot.get("agents", [])
+            name_lower = name.lower().strip()
+            for a in agents:
+                if (a.get("name", "").lower().strip() == name_lower):
+                    return a
+        except Exception as e:
+            logger.warning(f"[Builder] duplicate check failed: {e}")
+        return None
 
     async def _generate_instructions(self, goal: str, tools: list) -> str:
         tool_list = ", ".join(tools) if tools else "web_search, fetch_url"
