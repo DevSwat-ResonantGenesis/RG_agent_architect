@@ -18,7 +18,7 @@ from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.tool_executor import ToolExecutor
 from src.orchestrator.safety import get_safety
 from src.prompts.mode_classifier import classify_mode
-from src.prompts.system_prompt import PLATFORM_PROMPT
+from src.prompts.system_prompt import assemble_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -184,35 +184,17 @@ class Orchestrator:
             logger.warning(f"[Orch] context refresh failed: {e}")
 
         context_block = self._build_context_block()
-        system_content = PLATFORM_PROMPT
-        if context_block:
-            system_content += f"\n<context>\n{context_block}\n</context>"
+        agents = self.context.get("workspace", {}).get("agents", [])
+        agent_count = len(agents)
+        agent_names = [a.get("name", "?") for a in agents]
 
-        # Inject mode-specific guidance so the LLM doesn't skip brainstorming
-        if mode == OperationMode.BRAINSTORM:
-            system_content += (
-                "\n<mode_override>\nThe user's message is exploratory — they do NOT have a specific agent goal yet. "
-                "Do NOT call build_agent. Instead: ask what problem they want to solve, paint a concrete "
-                "picture of what an agent could do, and confirm before building. Use present_options "
-                "to offer 2-3 specific agent ideas based on the conversation.\n</mode_override>"
-            )
-        elif mode == OperationMode.REVIEW:
-            agent_count = len(self.context.get("workspace", {}).get("agents", []))
-            agent_names = [a.get("name", "?") for a in self.context.get("workspace", {}).get("agents", [])]
-            system_content += (
-                f"\n<mode_override>\nThe user is asking a REVIEW question about their agents or workspace. "
-                f"Answer their EXACT question directly using the <context> block above. "
-                f"They have {agent_count} agent(s): {', '.join(agent_names)}. "
-                f"Do NOT continue any previous conversation thread. Do NOT talk about building or modifying agents "
-                f"unless the user specifically asks. Answer the question, then suggest what they could do next."
-                f"\n</mode_override>"
-            )
-        elif mode == OperationMode.DIAGNOSE:
-            system_content += (
-                "\n<mode_override>\nThe user suspects something is broken. Investigate before acting. "
-                "Call workspace_snapshot and agent_snapshot first. Analyze run history, tool failures, "
-                "and config issues. Explain WHY something failed before proposing a fix.\n</mode_override>"
-            )
+        system_content = assemble_prompt(
+            mode=mode.value,
+            context_block=context_block,
+            agent_count=agent_count,
+            agent_names=agent_names,
+            is_run_event=False,
+        )
 
         messages = [{"role": "system", "content": system_content}]
         # For REVIEW mode, trim old history aggressively — user is asking a new question
