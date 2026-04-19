@@ -1,6 +1,7 @@
 """Resonant Agent Architect — FastAPI Application with SSE streaming"""
 import json
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -10,10 +11,18 @@ from typing import Dict, List, Optional
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
 from src.orchestrator.orchestrator import Orchestrator
+from src.prompts.router import preload_prompt_router, get_router
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Resonant Agent Architect", version="2.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Pre-train/load the neural prompt classifier on startup."""
+    await preload_prompt_router()
+    yield
+
+app = FastAPI(title="Resonant Agent Architect", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -113,3 +122,18 @@ async def get_workspace(workspace_id: str):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/prompt-router/stats")
+async def prompt_router_stats():
+    """Get neural prompt classifier statistics."""
+    router = get_router()
+    return router.get_stats()
+
+
+@app.post("/api/prompt-router/retrain")
+async def prompt_router_retrain():
+    """Retrain the prompt classifier with accumulated active learning data."""
+    router = get_router()
+    stats = await router.retrain()
+    return {"status": "retrained", "stats": stats}

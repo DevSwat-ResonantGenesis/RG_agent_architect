@@ -188,9 +188,10 @@ class Orchestrator:
         agent_count = len(agents)
         agent_names = [a.get("name", "?") for a in agents]
 
-        # Smart prompt selection: router picks only relevant prompt modules
+        # Smart prompt selection: neural classifier picks relevant prompt modules
         user_msg = self.history[-1]["content"] if self.history else ""
         router = get_router()
+        await router.ensure_ready()
         system_content = router.route(
             mode=mode.value,
             user_message=user_msg,
