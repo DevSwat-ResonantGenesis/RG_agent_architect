@@ -115,6 +115,77 @@ class MemoryStore:
             logger.warning(f"[Memory] get anchors failed: {e}")
         return {}
 
+    # ── Tasks / Planning / Brainstorm (persisted via RAG) ──
+
+    async def store_task(self, task: Dict) -> Dict:
+        """Store a task/TODO item. Works for per-agent or workspace-wide."""
+        import json as _json
+        body = {
+            "content": f"[task] {_json.dumps(task, default=str)}",
+            "user_id": self.workspace_id,
+            "scope": "agent" if self.agent_id else "user",
+            "type": "task",
+            "metadata": {
+                "task_id": task.get("id", ""),
+                "status": task.get("status", "pending"),
+                "priority": task.get("priority", "medium"),
+                "agent_id": self.agent_id or task.get("agent_id", ""),
+                "source": "architect",
+            },
+        }
+        if self.agent_id:
+            body["agent_id"] = self.agent_id
+        return await self._post("/rag/memories", body)
+
+    async def search_tasks(self, query: str = "all tasks and plans",
+                           agent_id: str = "", limit: int = 30) -> Dict:
+        """Search tasks/TODOs. If agent_id given, scope to that agent."""
+        body = {
+            "query": query,
+            "user_id": self.workspace_id,
+            "limit": limit,
+        }
+        if agent_id:
+            body["agent_id"] = agent_id
+            body["scope"] = "agent"
+        else:
+            body["scope"] = "user"
+        # Filter by type=task in the search
+        body["metadata_filter"] = {"type": "task"}
+        return await self._post("/memory/hash-sphere/search", body)
+
+    async def store_brainstorm(self, content: str, agent_id: str = "") -> Dict:
+        """Store a brainstorm idea — workspace or per-agent."""
+        body = {
+            "content": f"[brainstorm] {content}",
+            "user_id": self.workspace_id,
+            "scope": "agent" if agent_id else "user",
+            "type": "brainstorm",
+            "metadata": {
+                "agent_id": agent_id,
+                "source": "architect",
+            },
+        }
+        if agent_id:
+            body["agent_id"] = agent_id
+        return await self._post("/rag/memories", body)
+
+    async def search_brainstorms(self, query: str = "brainstorm ideas",
+                                  agent_id: str = "", limit: int = 20) -> Dict:
+        """Search brainstorm entries."""
+        body = {
+            "query": query,
+            "user_id": self.workspace_id,
+            "limit": limit,
+        }
+        if agent_id:
+            body["agent_id"] = agent_id
+            body["scope"] = "agent"
+        else:
+            body["scope"] = "user"
+        body["metadata_filter"] = {"type": "brainstorm"}
+        return await self._post("/memory/hash-sphere/search", body)
+
     # ── Architect Self-Learning (learns from every conversation) ──
 
     async def store_architect_insight(self, insight: str, category: str = "observation") -> Dict:

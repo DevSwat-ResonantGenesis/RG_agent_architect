@@ -447,6 +447,20 @@ def _tool_progress_message(name: str, args: Dict) -> str:
         return "Checking connected integrations..."
     if name == "workspace_snapshot":
         return "Loading workspace..."
+    if name == "delegate_to_agent":
+        return f"Delegating task to agent {args.get('agent_id', '')[:8]}..."
+    if name == "delegate_by_name":
+        return f"Delegating task to agent '{args.get('agent_name', '?')}'..."
+    if name == "create_task":
+        return f"Creating task: {args.get('title', '?')}..."
+    if name == "list_tasks":
+        return "Loading tasks..."
+    if name == "update_task":
+        return f"Updating task {args.get('task_id', '')}..."
+    if name == "brainstorm":
+        return "Storing brainstorm idea..."
+    if name == "get_workspace_plan":
+        return "Loading workspace plan..."
     return f"Executing {name}..."
 
 
@@ -469,6 +483,14 @@ def _tool_result_message(name: str, result: Any) -> str:
         return f"Run complete: {result.get('outcome', '')} in {result.get('loops', 0)} loops"
     if name == "set_trigger":
         return f"Schedule set: {result.get('interval', 'daily')}"
+    if name in ("delegate_to_agent", "delegate_by_name"):
+        return f"Delegated to '{result.get('delegated_to', '?')}' — {result.get('outcome', '?')}: {result.get('summary', '')[:100]}"
+    if name == "create_task":
+        return f"Task created: {result.get('task', {}).get('title', '')}"
+    if name == "brainstorm":
+        return f"Brainstorm stored"
+    if name == "get_workspace_plan":
+        return f"Workspace plan loaded"
     return f"{name} completed"
 
 
@@ -529,6 +551,27 @@ def _summarize_actions(actions: list) -> str:
                     parts.append(f"Deleted all {count} agents.")
         elif tool == "stop_run":
             parts.append("Stopped the run.")
+        elif tool in ("delegate_to_agent", "delegate_by_name"):
+            delegated = r.get("delegated_to", "agent")
+            outcome = r.get("outcome", "?")
+            summary = r.get("summary", "")[:150]
+            if err:
+                parts.append(f"Tried to delegate to **{delegated}** but failed: {err}")
+            else:
+                parts.append(f"Delegated to **{delegated}** — {outcome}. {summary}")
+        elif tool == "create_task":
+            task = r.get("task", {})
+            parts.append(f"Created task: **{task.get('title', '?')}** [{task.get('priority', 'medium')}]")
+        elif tool == "update_task":
+            task = r.get("task", {})
+            parts.append(f"Updated task {task.get('id', '?')} → {task.get('status', '?')}")
+        elif tool == "brainstorm":
+            content = r.get("content", "")[:80]
+            parts.append(f"Stored brainstorm: {content}")
+        elif tool == "get_workspace_plan":
+            parts.append("Loaded workspace plan.")
+        elif tool == "list_tasks":
+            parts.append("Retrieved task list.")
         elif tool == "present_options":
             pass
     return " ".join(parts) if parts else ""
