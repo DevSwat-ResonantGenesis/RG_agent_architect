@@ -104,4 +104,30 @@ ORCHESTRATOR_TOOLS = [
        {"insight": {"type": "string", "description": "What you learned"}, "category": {"type": "string", "description": "One of: observation, user_preference, agent_pattern, failure_pattern, success_pattern"}},
        ["insight", "category"]),
     _t("retrieve_architect_context", "Get your accumulated knowledge: past insights, user preferences, patterns you've noticed. Call this at the start of every session to remember what you know."),
+    # ── Prompt Management ──
+    _t("get_agent_prompt", "Read an agent's current system prompt / instructions",
+       {"agent_id": {"type": "string"}}, ["agent_id"]),
+    _t("update_agent_prompt", "Write or replace an agent's system prompt / instructions",
+       {"agent_id": {"type": "string"}, "prompt": {"type": "string", "description": "The full new system prompt text"}},
+       ["agent_id", "prompt"]),
+    # ── Agent Config ──
+    _t("update_agent_config", "Update agent configuration: model, temperature, max_tokens, mode, tools, provider, is_active, max_loops, tool_mode",
+       {"agent_id": {"type": "string"},
+        "model": {"type": "string", "description": "LLM model e.g. groq/llama-3.3-70b-versatile, openai/gpt-4o"},
+        "temperature": {"type": "number"}, "max_tokens": {"type": "integer"},
+        "mode": {"type": "string", "description": "Agent mode: smart, autonomous, manual"},
+        "tools": {"type": "array", "items": {"type": "string"}, "description": "Replace tool list"},
+        "is_active": {"type": "boolean"}, "max_loops": {"type": "integer"},
+        "tool_mode": {"type": "string", "description": "smart or manual"}}, ["agent_id"]),
+    # ── Schedules ──
+    _t("create_schedule", "Create a cron schedule for an agent to run automatically",
+       {"agent_id": {"type": "string"},
+        "cron": {"type": "string", "description": "Cron expression e.g. '0 9 * * *' for daily 9am, '0 * * * *' for hourly"},
+        "goal": {"type": "string", "description": "Goal override for scheduled runs"},
+        "timezone": {"type": "string", "description": "Timezone e.g. UTC, America/New_York"}}, ["agent_id", "cron"]),
+    # ── Session History ──
+    _t("get_agent_sessions", "Get recent execution sessions/runs for an agent",
+       {"agent_id": {"type": "string"}}, ["agent_id"]),
+    _t("get_session_steps", "Get step-by-step execution trace for a specific session/run",
+       {"session_id": {"type": "string"}}, ["session_id"]),
 ]

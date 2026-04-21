@@ -110,6 +110,122 @@ class ToolExecutor:
     async def _tool_get_agent_chain_status(self, a):
         return await chain_client.get_agent_chain_status(a.get("agent_id", ""))
 
+    # ── Prompt Management (read/write/modify system_prompt per agent) ──
+    async def _tool_get_agent_prompt(self, a):
+        """Read an agent's current system prompt via Agent Engine."""
+        agent = await self.ws_db.get_agent(a["agent_id"])
+        if not agent:
+            return {"error": "Agent not found"}
+        return {
+            "agent_id": a["agent_id"],
+            "name": agent.get("name", ""),
+            "system_prompt": agent.get("system_prompt", ""),
+            "model": agent.get("model", ""),
+            "provider": agent.get("provider", ""),
+        }
+
+    async def _tool_update_agent_prompt(self, a):
+        """Write or replace an agent's system prompt via Agent Engine PATCH."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        payload = {"system_prompt": a["prompt"]}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.patch(
+                    f"{AGENT_ENGINE_URL}/agents/{a['agent_id']}",
+                    headers=self.ws_db._headers, json=payload,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {"updated": True, "agent_id": a["agent_id"],
+                            "updated_fields": data.get("updated_fields", ["system_prompt"])}
+                return {"error": f"PATCH failed: {resp.status_code} {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Agent Config (model, temperature, mode, tools via Agent Engine PATCH) ──
+    async def _tool_update_agent_config(self, a):
+        """Update agent configuration fields: model, temperature, max_tokens, mode, tools."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        updatable = ("model", "temperature", "max_tokens", "mode", "tools",
+                     "provider", "is_active", "max_loops", "tool_mode")
+        payload = {k: a[k] for k in updatable if k in a}
+        if not payload:
+            return {"error": "No valid fields to update. Accepted: " + ", ".join(updatable)}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.patch(
+                    f"{AGENT_ENGINE_URL}/agents/{a['agent_id']}",
+                    headers=self.ws_db._headers, json=payload,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return {"updated": True, "agent_id": a["agent_id"],
+                            "updated_fields": data.get("updated_fields", list(payload.keys()))}
+                return {"error": f"PATCH failed: {resp.status_code} {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Schedules (create cron via Agent Engine) ──
+    async def _tool_create_schedule(self, a):
+        """Create a cron schedule for an agent via Agent Engine."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        payload = {
+            "cron_expression": a.get("cron", "0 9 * * *"),
+            "goal": a.get("goal", ""),
+            "timezone": a.get("timezone", "UTC"),
+            "enabled": True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/{a['agent_id']}/schedules",
+                    headers=self.ws_db._headers, json=payload,
+                )
+                if resp.status_code in (200, 201):
+                    return resp.json()
+                return {"error": f"Schedule creation failed: {resp.status_code} {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Sessions / Steps (read execution history) ──
+    async def _tool_get_agent_sessions(self, a):
+        """Get recent sessions for an agent."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/{a['agent_id']}/sessions",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    sessions = resp.json()
+                    if isinstance(sessions, list):
+                        return {"sessions": sessions[:10], "count": len(sessions)}
+                    return sessions
+                return {"error": f"Failed: {resp.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _tool_get_session_steps(self, a):
+        """Get step-by-step execution trace for a session."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/sessions/{a['session_id']}/steps",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Failed: {resp.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
     # ── Architect Self-Learning ──
     async def _tool_store_insight(self, a):
         return await self.memory.store_architect_insight(
