@@ -262,6 +262,16 @@
 #     mode, templates, federation, governance, compliance, teams, marketplace,
 #     publishing, learning, limits, capabilities, watchdog, repo-to-agent
 #
+# PHASE 1d: Classifier Training & Verification — COMPLETED 2026-04-22
+# [x] ArchitectToolClassifier now trains at STARTUP (was lazy/never)
+# [x] Added _preload_tool_classifier() to lifespan in main.py
+# [x] Added /api/tool-classifier/stats and /api/tool-classifier/predict endpoints
+# [x] Verified in production: 15 groups, 223 samples, accuracy=0.8341
+# [x] All 14 groups classify correctly (build, teams, marketplace, etc.)
+# [x] Agent Engine classifier: rebuilt container (tool_classifier/ was missing!)
+# [x] Agent Engine: 203 tools, 1030 samples, accuracy=0.8874, model v1 saved to DB
+# [x] Agent Engine: auto-detected stale model (200→203 classes), retrained
+#
 # PHASE 2: Intelligence pipeline — TODO
 # [ ] Pre-build research: check integrations, providers, credits, memory
 # [ ] Provider health check: test LLM before assigning to agent
