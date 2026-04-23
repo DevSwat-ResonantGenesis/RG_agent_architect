@@ -237,10 +237,14 @@ class Orchestrator:
 
         self._progress_queue = None
 
-    # ── Build Pipeline (multi-step interactive workflow) ──
+    # ── Build Pipeline (autonomous end-to-end workflow) ──
 
     async def _start_build_pipeline(self, user_message: str) -> Dict[str, Any]:
-        """Start a new build pipeline: research → plan → present to user."""
+        """Full autonomous pipeline: research → plan → verify → prompt → build → test → offers.
+
+        Runs ALL phases in one continuous stream with no stops.
+        Streams formatted progress as one rich message.
+        """
         from src.services.database.workspace_db import WorkspaceDB
         ws_db = WorkspaceDB(self.workspace_id, self.user_id)
 
@@ -253,166 +257,69 @@ class Orchestrator:
             user_api_keys=self._user_api_keys,
         )
         self._pipeline = pipeline
+        text_parts = []
 
-        # Phase 1: Research
+        # ── Phase 1: RESEARCH ──
         research = await pipeline.run_phase_1_research()
+        credits_info = research.get("credits", {})
+        connected = research.get("integrations", {})
+        connected_list = connected.get("connected", []) if isinstance(connected, dict) else []
+        existing = research.get("existing_agents", [])
+
+        text_parts.append("🔍 **Research complete**")
+        text_parts.append(f"  - Credits: {credits_info.get('remaining', 'available')}")
+        text_parts.append(f"  - Integrations: {len(connected_list)} connected")
+        text_parts.append(f"  - Existing agents: {len(existing)}")
+        for w in research.get("warnings", []):
+            text_parts.append(f"  - ⚠️ {w}")
+        await self._emit_progress("text", {"content": "\n".join(text_parts)})
 
         # Block if no credits
         for w in research.get("warnings", []):
             if "exhausted" in w.lower():
                 self._pipeline = None
                 self._pipeline_phase = None
-                return {"text": w, "mode": "control"}
+                return {"text": "\n".join(text_parts), "mode": "control"}
 
-        # Phase 2: Generate plan
+        # ── Phase 2: PLAN ──
         plan = await pipeline.run_phase_2_plan()
         self._pipeline_plan = plan
-        self._pipeline_phase = "waiting_confirm"
-
-        # Build the user-facing response
-        text_parts = []
-        text_parts.append(f"Here's my build plan for **{plan.get('name', 'your agent')}**:\n")
-        text_parts.append(f"> **Goal:** {plan.get('goal', '')}\n")
 
         tools = plan.get('tools', [])
         reasoning = plan.get('tools_reasoning', {})
+        text_parts.append(f"\n📋 **Build Plan: {plan.get('name', 'Agent')}** {plan.get('icon', '🤖')}")
+        text_parts.append(f"> {plan.get('goal', '')}\n")
         text_parts.append("**Tools:**")
         for t in tools:
             reason = reasoning.get(t, "")
             text_parts.append(f"  - `{t}` — {reason}" if reason else f"  - `{t}`")
-
         text_parts.append(f"\n**Model:** {plan.get('model', '')} — {plan.get('model_reasoning', '')}")
         text_parts.append(f"**Temperature:** {plan.get('temperature', 0.5)} — {plan.get('temperature_reasoning', '')}")
-        text_parts.append(f"**Max Loops:** {plan.get('max_loops', 30)} — {plan.get('max_loops_reasoning', '')}")
-
         if plan.get('risks'):
             text_parts.append(f"\n⚠️ **Risks:** {', '.join(plan['risks'])}")
         if plan.get('recommendations'):
-            text_parts.append(f"\n💡 **Recommendations:** {', '.join(plan['recommendations'])}")
+            text_parts.append(f"💡 **Tips:** {', '.join(plan['recommendations'])}")
         if plan.get('duplicate_warning'):
-            text_parts.append(f"\n⚠️ {plan['duplicate_warning']}")
+            text_parts.append(f"⚠️ {plan['duplicate_warning']}")
+        await self._emit_progress("text", {"content": "\n".join(text_parts)})
 
-        text_parts.append("\n---")
-        text_parts.append("Review the plan above. What would you like to do?")
-
-        text = "\n".join(text_parts)
-
-        # Present options for user to confirm/adjust
-        await self._emit_progress("text", {"content": text})
-        await self._emit_progress("options", {
-            "question": "Review the plan above. What would you like to do?",
-            "options": ["Build it", "Adjust tools", "Change model", "Adjust settings", "Cancel"],
-        })
-
-        return {
-            "text": text,
-            "mode": "control",
-            "pipeline_phase": "waiting_confirm",
-            "plan": plan,
-            "options": {
-                "question": "Review the plan above.",
-                "options": ["Build it", "Adjust tools", "Change model", "Adjust settings", "Cancel"],
-            },
-        }
-
-    async def _continue_build_pipeline(self, user_message: str) -> Dict[str, Any]:
-        """Continue the build pipeline based on user's response."""
-        pipeline = self._pipeline
-        plan = self._pipeline_plan
-        phase = self._pipeline_phase
-        msg_lower = user_message.lower().strip()
-
-        if not pipeline or not plan:
-            self._pipeline = None
-            self._pipeline_phase = None
-            self._pipeline_plan = None
-            return await self._run_loop(classify_mode(user_message, True))
-
-        # ── CANCEL ──
-        if msg_lower in ("cancel", "no", "stop", "nevermind", "forget it"):
-            self._pipeline = None
-            self._pipeline_phase = None
-            self._pipeline_plan = None
-            return {"text": "Build cancelled. What would you like to do instead?", "mode": "control"}
-
-        # ── WAITING FOR BUILD CONFIRMATION ──
-        if phase == "waiting_confirm":
-            if msg_lower in ("build it", "confirm", "yes", "go", "ok", "proceed",
-                             "build", "do it", "approved", "looks good", "yes build it"):
-                # User confirmed — run verify → prompt → build → test → offers
-                return await self._execute_confirmed_build(pipeline, plan)
-            elif "adjust" in msg_lower or "change" in msg_lower or "modify" in msg_lower:
-                # User wants to adjust something — ask what
-                self._pipeline_phase = "waiting_adjustment"
-                await self._emit_progress("text", {
-                    "content": "What would you like to adjust? You can change:\n"
-                               "- **Tools** (add or remove)\n"
-                               "- **Model** (faster/smarter)\n"
-                               "- **Temperature** (creative vs precise)\n"
-                               "- **Max loops** (how many steps)\n"
-                               "- **Goal** (rewrite the objective)\n"
-                               "\nTell me what to change."
-                })
-                return {
-                    "text": "What would you like to adjust? Tell me what to change.",
-                    "mode": "control",
-                    "pipeline_phase": "waiting_adjustment",
-                }
-            else:
-                # Treat as adjustment instruction
-                return await self._apply_plan_adjustment(pipeline, plan, user_message)
-
-        # ── WAITING FOR ADJUSTMENT ──
-        if phase == "waiting_adjustment":
-            return await self._apply_plan_adjustment(pipeline, plan, user_message)
-
-        # ── WAITING FOR POST-BUILD ACTION ──
-        if phase == "waiting_post_build":
-            agent_id = plan.get("_built_agent_id", "")
-            if "run" in msg_lower or "test" in msg_lower or "execute" in msg_lower:
-                result = await pipeline.run_phase_6_test(agent_id, plan.get("goal", ""))
-                return {
-                    "text": f"Test run: {result.get('status', 'unknown')}",
-                    "mode": "control",
-                    "test_run": result,
-                }
-            elif "schedule" in msg_lower or "daily" in msg_lower or "hourly" in msg_lower:
-                # Let the normal orchestrator handle scheduling
-                self._pipeline = None
-                self._pipeline_phase = None
-                self._pipeline_plan = None
-                return await self._run_loop(classify_mode(user_message, True))
-            else:
-                # Done with pipeline
-                self._pipeline = None
-                self._pipeline_phase = None
-                self._pipeline_plan = None
-                return await self._run_loop(classify_mode(user_message, True))
-
-        # Fallback: clear pipeline and use normal flow
-        self._pipeline = None
-        self._pipeline_phase = None
-        self._pipeline_plan = None
-        return await self._run_loop(classify_mode(user_message, True))
-
-    async def _execute_confirmed_build(
-        self, pipeline: BuildPipeline, plan: Dict
-    ) -> Dict[str, Any]:
-        """Run the full build: verify → prompt → build → test → offers."""
-        text_parts = []
-
-        # Phase 3: Verify
+        # ── Phase 3: VERIFY ──
         verification = await pipeline.run_phase_3_verify(plan)
-
         if not verification.get("provider_ok"):
             plan["model"] = "groq/llama-3.3-70b-versatile"
-            text_parts.append("⚠️ Provider unhealthy — switched to fallback model.")
+            text_parts.append("\n⚠️ Provider issue — switched to fallback model.")
+        else:
+            text_parts.append(f"\n✅ **Verification passed** — {plan.get('model', '')} responding, tools ready")
+        for w in verification.get("warnings", []):
+            text_parts.append(f"  - ⚠️ {w}")
+        await self._emit_progress("text", {"content": "\n".join(text_parts)})
 
-        # Phase 4: Generate prompt
+        # ── Phase 4: GENERATE PROMPT ──
         prompt = await pipeline.run_phase_4_generate_prompt(plan)
-        text_parts.append(f"\n📝 Agent instructions generated ({len(prompt)} chars).")
+        text_parts.append(f"\n🧠 **Agent instructions generated** ({len(prompt)} chars)")
+        await self._emit_progress("text", {"content": "\n".join(text_parts)})
 
-        # Phase 5: Build
+        # ── Phase 5: BUILD ──
         build_result = await pipeline.run_phase_5_build(plan)
         agent_id = build_result.get("agent_id", "")
         success = build_result.get("outcome") == "SUCCESS"
@@ -420,25 +327,25 @@ class Orchestrator:
         if success:
             text_parts.append(f"\n✅ **{plan.get('name', 'Agent')}** built successfully!")
             text_parts.append(f"Agent ID: `{agent_id}`")
-
             if build_result.get("verified"):
                 text_parts.append("✅ Verified in database")
             if build_result.get("identity_hash"):
                 text_parts.append(f"✅ Blockchain identity: `{build_result['identity_hash'][:16]}...`")
+            await self._emit_progress("text", {"content": "\n".join(text_parts)})
 
-            # Phase 6: Test run
+            # ── Phase 6: TEST ──
             test_result = await pipeline.run_phase_6_test(agent_id, plan.get("goal", ""))
             if test_result.get("status") == "success":
                 text_parts.append(
-                    f"\n✅ Test passed — {test_result.get('steps', 0)} steps "
+                    f"\n🧪 **Test passed** — {test_result.get('steps', 0)} steps "
                     f"in {test_result.get('duration_s', 0):.1f}s"
                 )
             elif test_result.get("status") == "failed":
                 text_parts.append(f"\n⚠️ Test run failed: {test_result.get('error', 'unknown')}")
             else:
-                text_parts.append(f"\nℹ️ Test run: {test_result.get('status', 'skipped')}")
+                text_parts.append(f"\nℹ️ Test: {test_result.get('status', 'skipped')}")
 
-            # Phase 7: Offers
+            # ── Phase 7: OFFERS ──
             offers = await pipeline.generate_offers(
                 agent_id, plan.get("name", ""),
                 plan.get("goal", ""), plan.get("tools", []),
@@ -453,6 +360,13 @@ class Orchestrator:
 
             text = "\n".join(text_parts)
             await self._emit_progress("text", {"content": text})
+
+            option_labels = [o["title"] for o in offers[:4]] if offers else ["Run it now"]
+            await self._emit_progress("options", {
+                "question": "What's next?",
+                "options": option_labels,
+            })
+
             return {
                 "text": text, "mode": "control",
                 "pipeline_phase": "waiting_post_build",
@@ -460,6 +374,7 @@ class Orchestrator:
                 "build_result": build_result,
                 "test_result": test_result,
                 "offers": offers,
+                "options": {"question": "What's next?", "options": option_labels},
             }
         else:
             error = build_result.get("error", "Unknown build error")
@@ -471,70 +386,42 @@ class Orchestrator:
             await self._emit_progress("text", {"content": text})
             return {"text": text, "mode": "control", "error": error}
 
-    async def _apply_plan_adjustment(
-        self, pipeline: BuildPipeline, plan: Dict, user_message: str
-    ) -> Dict[str, Any]:
-        """Use LLM to interpret user's adjustment and update the plan."""
-        import json as _json
-        await self._emit_progress("thinking", {"message": "Adjusting plan..."})
-
-        prompt = f"""Current agent build plan:
-{_json.dumps(plan, indent=2, default=str)}
-
-User wants to adjust: "{user_message}"
-
-Output the UPDATED plan as a JSON object with the same structure.
-Only change what the user asked to change. Keep everything else the same.
-Respond with ONLY the JSON, no markdown fences, no explanation."""
-
-        try:
-            resp = await call_llm(
-                messages=[{"role": "user", "content": prompt}],
-                model="groq/llama-3.3-70b-versatile",
-                max_tokens=2000, temperature=0.2,
-            )
-            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-            clean = content.strip()
-            if clean.startswith("```"):
-                clean = clean.split("\n", 1)[-1]
-                if clean.endswith("```"):
-                    clean = clean[:-3]
-                clean = clean.strip()
-            updated_plan = _json.loads(clean)
-            self._pipeline_plan = updated_plan
-        except Exception as e:
-            logger.warning(f"[Pipeline] Adjustment failed: {e}")
-            return {"text": f"Couldn't parse that adjustment. Try being more specific.", "mode": "control"}
-
-        # Re-present the updated plan
-        self._pipeline_phase = "waiting_confirm"
+    async def _continue_build_pipeline(self, user_message: str) -> Dict[str, Any]:
+        """Handle post-build follow-up actions (schedule, run, etc.)."""
+        pipeline = self._pipeline
         plan = self._pipeline_plan
+        msg_lower = user_message.lower().strip()
 
-        text_parts = [f"Updated plan for **{plan.get('name', 'your agent')}**:\n"]
-        text_parts.append(f"> **Goal:** {plan.get('goal', '')}\n")
-        for t in plan.get('tools', []):
-            text_parts.append(f"  - `{t}`")
-        text_parts.append(f"\n**Model:** {plan.get('model', '')}")
-        text_parts.append(f"**Temperature:** {plan.get('temperature', 0.5)}")
-        text_parts.append(f"**Max Loops:** {plan.get('max_loops', 30)}")
-        text_parts.append("\n---\nLook good now?")
+        if not pipeline or not plan:
+            self._pipeline = None
+            self._pipeline_phase = None
+            self._pipeline_plan = None
+            return await self._run_loop(classify_mode(user_message, True))
 
-        text = "\n".join(text_parts)
-        await self._emit_progress("text", {"content": text})
-        await self._emit_progress("options", {
-            "question": "Look good now?",
-            "options": ["Build it", "Adjust more", "Cancel"],
-        })
+        agent_id = plan.get("_built_agent_id", "")
 
-        return {
-            "text": text, "mode": "control",
-            "pipeline_phase": "waiting_confirm",
-            "plan": plan,
-            "options": {
-                "question": "Look good now?",
-                "options": ["Build it", "Adjust more", "Cancel"],
-            },
-        }
+        # Run / test the agent
+        if agent_id and any(kw in msg_lower for kw in ("run", "test", "execute", "now", "try")):
+            result = await pipeline.run_phase_6_test(agent_id, plan.get("goal", ""))
+            self._pipeline = None
+            self._pipeline_phase = None
+            self._pipeline_plan = None
+            status = result.get("status", "unknown")
+            if status == "success":
+                text = (f"✅ Agent ran successfully — {result.get('steps', 0)} steps "
+                        f"in {result.get('duration_s', 0):.1f}s")
+            elif status == "failed":
+                text = f"❌ Run failed: {result.get('error', 'unknown')}"
+            else:
+                text = f"ℹ️ Run status: {status}"
+            await self._emit_progress("text", {"content": text})
+            return {"text": text, "mode": "control", "test_run": result}
+
+        # Schedule — hand off to normal orchestrator which has set_trigger tool
+        self._pipeline = None
+        self._pipeline_phase = None
+        self._pipeline_plan = None
+        return await self._run_loop(classify_mode(user_message, True))
 
     # ── Core LLM loop (for non-build intents) ──
 
