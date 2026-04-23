@@ -13,6 +13,7 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(mes
 from src.orchestrator.orchestrator import Orchestrator
 from src.prompts.router import preload_prompt_router, get_router
 from src.builder.agent_type_classifier import preload_agent_type_classifier, get_agent_type_classifier
+from src.orchestrator.tool_classifier import architect_tool_classifier
 from src.services import ml_model_store
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,36 @@ async def lifespan(app: FastAPI):
         logger.warning("[Startup] No DATABASE_URL — ML models will NOT persist across restarts")
     await preload_prompt_router()
     await preload_agent_type_classifier()
+    await _preload_tool_classifier()
     yield
+
+
+async def _preload_tool_classifier():
+    """Train the architect tool classifier at startup (not lazily)."""
+    import asyncio
+    import time
+
+    async def _train():
+        t0 = time.time()
+        try:
+            ok = await architect_tool_classifier.ensure_ready()
+            elapsed = (time.time() - t0) * 1000
+            if ok:
+                stats = architect_tool_classifier.get_stats()
+                print(
+                    f"[ArchitectToolClassifier] Trained in {elapsed:.0f}ms — "
+                    f"{stats['stats'].get('n_groups', '?')} groups, "
+                    f"{stats['stats'].get('n_samples', 0)} samples, "
+                    f"accuracy={stats['stats'].get('accuracy', 0)}",
+                    flush=True,
+                )
+            else:
+                print(f"[ArchitectToolClassifier] Training FAILED in {elapsed:.0f}ms", flush=True)
+        except Exception as e:
+            elapsed = (time.time() - t0) * 1000
+            print(f"[ArchitectToolClassifier] Training error ({elapsed:.0f}ms): {e}", flush=True)
+
+    asyncio.create_task(_train())
 
 app = FastAPI(title="Resonant Agent Architect", version="2.0.0", lifespan=lifespan)
 
@@ -177,3 +207,17 @@ async def classify_agent_type(req: dict):
         tools=req.get("tools"),
     )
     return result
+
+
+@app.get("/api/tool-classifier/stats")
+async def tool_classifier_stats():
+    """Get architect tool classifier statistics."""
+    return architect_tool_classifier.get_stats()
+
+
+@app.post("/api/tool-classifier/predict")
+async def tool_classifier_predict(req: dict):
+    """Predict tool group for a message (for testing/debugging)."""
+    await architect_tool_classifier.ensure_ready()
+    tools, group = architect_tool_classifier.get_tools_for_message(req.get("message", ""))
+    return {"group": group, "tools": tools, "n_tools": len(tools)}
