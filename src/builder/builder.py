@@ -55,7 +55,16 @@ class Builder:
                     model: str = "groq/llama-3.3-70b-versatile") -> Dict[str, Any]:
         run_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
-        resolved_tools = tools or ["web_search", "fetch_url"]
+
+        # ── PHASE -1: Neural tool selection from Agent Engine (74+ tools) ──
+        if tools:
+            resolved_tools = tools
+        else:
+            resolved_tools = await self._predict_optimal_tools(goal)
+            if not resolved_tools:
+                resolved_tools = ["web_search", "fetch_url"]
+            await self._emit("tool_selection",
+                             f"Neural classifier selected {len(resolved_tools)} tools: {resolved_tools}")
 
         # ── PHASE 0: Duplicate detection ──
         # Check if agent with same name already exists — modify instead of duplicate
@@ -278,6 +287,35 @@ class Builder:
         }
 
     # ── Internal helpers ──
+
+    async def _predict_optimal_tools(self, goal: str) -> List[str]:
+        """Use Agent Engine's neural tool classifier to pick optimal tools for a goal.
+
+        Calls POST /tools/classifier/predict which has the full 74+ tool registry.
+        Returns top tools above confidence threshold.
+        """
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/tools/classifier/predict",
+                    headers=self.ws_db._headers,
+                    json={"goal": goal, "n": 8},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    predictions = data.get("predictions", [])
+                    # Take tools with confidence > 0.05 (neural classifier distributes)
+                    tools = [p["tool"] for p in predictions if p.get("confidence", 0) > 0.05]
+                    if tools:
+                        logger.info(f"[Builder] Neural tool prediction for '{goal[:40]}': {tools}")
+                        return tools[:6]  # Cap at 6 tools per agent
+                else:
+                    logger.warning(f"[Builder] Tool classifier returned {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"[Builder] Neural tool prediction failed: {e}")
+        return []
 
     async def _find_agent_by_name(self, name: str) -> Optional[Dict]:
         """Check if an agent with this name already exists in the workspace."""

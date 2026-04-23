@@ -17,6 +17,7 @@ from src.models.agent import OperationMode
 from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.tool_executor import ToolExecutor
 from src.orchestrator.safety import get_safety
+from src.orchestrator.tool_classifier import architect_tool_classifier, fallback_get_tools, TOOL_GROUPS
 from src.prompts.mode_classifier import classify_mode
 from src.prompts.router import get_router
 from src.services.auth.integration_client import get_user_api_keys
@@ -220,6 +221,38 @@ class Orchestrator:
             is_run_event=False,
         )
 
+        # ── Neural tool selection: only inject relevant tools per message ──
+        selected_tool_names = None
+        predicted_group = "all"
+        try:
+            ready = await architect_tool_classifier.ensure_ready()
+            if ready:
+                selected_tool_names, predicted_group = \
+                    architect_tool_classifier.get_tools_for_message(user_msg)
+                logger.info(
+                    f"[Orch] Tool classifier: group={predicted_group} "
+                    f"tools={len(selected_tool_names or [])} msg={user_msg[:60]!r}"
+                )
+            else:
+                selected_tool_names, predicted_group = fallback_get_tools(user_msg)
+                logger.info(f"[Orch] Tool classifier fallback: group={predicted_group}")
+        except Exception as e:
+            logger.warning(f"[Orch] Tool classifier failed, using all tools: {e}")
+
+        # Filter ORCHESTRATOR_TOOLS to only the selected subset
+        if selected_tool_names and predicted_group != "none":
+            name_set = set(selected_tool_names)
+            selected_tools = [t for t in ORCHESTRATOR_TOOLS
+                              if t["function"]["name"] in name_set]
+            # Safety: if filter produced too few, fall back to all
+            if len(selected_tools) < 2:
+                selected_tools = ORCHESTRATOR_TOOLS
+                logger.warning("[Orch] Tool filter too aggressive, using all tools")
+        elif predicted_group == "none":
+            selected_tools = []  # Pure text response, no tools
+        else:
+            selected_tools = ORCHESTRATOR_TOOLS  # Fallback: all tools
+
         messages = [{"role": "system", "content": system_content}]
         # For REVIEW mode, trim old history aggressively — user is asking a new question
         if mode == OperationMode.REVIEW and len(self.history) > 4:
@@ -241,7 +274,7 @@ class Orchestrator:
             try:
                 resp = await call_llm(
                     messages=messages,
-                    tools=ORCHESTRATOR_TOOLS,
+                    tools=selected_tools,
                     model="groq/llama-3.3-70b-versatile",
                     temperature=0.5,
                     max_tokens=MAX_TOKENS,

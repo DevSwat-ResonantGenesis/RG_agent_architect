@@ -159,4 +159,25 @@ ORCHESTRATOR_TOOLS = [
        {"content": {"type": "string", "description": "The brainstorm idea, plan, or thought"},
         "agent_id": {"type": "string", "description": "Optional — scope to a specific agent"}}, ["content"]),
     _t("get_workspace_plan", "Get the full workspace plan: all TODO tasks + brainstorms across all agents. Use this to review the current state of planning."),
+    # ── Session Control (cancel, approve, emergency stop) ──
+    _t("cancel_session", "Cancel/stop a running agent session immediately.",
+       {"session_id": {"type": "string", "description": "Session ID to cancel"}}, ["session_id"]),
+    _t("emergency_stop", "EMERGENCY KILL SWITCH — cancel ALL running sessions and disable ALL schedules for an agent. Use when agent is out of control.",
+       {"agent_id": {"type": "string", "description": "Agent ID to emergency stop"}}, ["agent_id"]),
+    _t("approve_step", "Approve a pending step that requires human approval.",
+       {"session_id": {"type": "string", "description": "Session ID"},
+        "step_id": {"type": "string", "description": "Step ID to approve"}}, ["session_id", "step_id"]),
+    _t("get_pending_approvals", "List all pending approval requests across all agents."),
+    # ── Full Tool Registry (74+ tools from Agent Engine) ──
+    _t("list_engine_tools", "List ALL platform tools from Agent Engine (74+ tools). Use this to see every tool available for agents."),
+    _t("execute_tool", "Execute any platform tool directly for testing. Verify a tool works before assigning it to an agent.",
+       {"tool_name": {"type": "string", "description": "Tool name (e.g. web_search, fetch_url)"},
+        "tool_input": {"type": "object", "description": "Input parameters for the tool"}}, ["tool_name", "tool_input"]),
+    # ── Provider & Metrics ──
+    _t("list_providers", "List all available LLM providers and models. Check which are healthy before selecting a model."),
+    _t("get_agent_metrics", "Get performance metrics for an agent: sessions, success rate, avg duration.",
+       {"agent_id": {"type": "string"}}, ["agent_id"]),
+    # ── Schedule Management ──
+    _t("list_schedules", "List all cron schedules for an agent.",
+       {"agent_id": {"type": "string"}}, ["agent_id"]),
 ]

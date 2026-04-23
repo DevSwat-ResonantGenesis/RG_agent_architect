@@ -370,6 +370,158 @@ class ToolExecutor:
     async def _tool_retrieve_architect_context(self, a):
         return await self.memory.retrieve_architect_context()
 
+    # ── Session Control (cancel, approve, emergency stop) ──
+    async def _tool_cancel_session(self, a):
+        """Cancel a running session via Agent Engine."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/sessions/{a['session_id']}/cancel",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Cancel failed: {resp.status_code} {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _tool_emergency_stop(self, a):
+        """Emergency stop — cancel ALL sessions and disable ALL schedules for an agent."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/{a['agent_id']}/emergency-stop",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Emergency stop failed: {resp.status_code} {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _tool_approve_step(self, a):
+        """Approve a pending step via Agent Engine."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/sessions/{a['session_id']}/approve/{a['step_id']}",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Approve failed: {resp.status_code} {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _tool_get_pending_approvals(self, a):
+        """Get all pending approval requests."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/approvals/pending",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Failed: {resp.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Full Tool Registry + Direct Execution ──
+    async def _tool_list_engine_tools(self, a):
+        """List ALL 74+ platform tools from Agent Engine."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/tools/list",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Failed: {resp.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _tool_execute_tool(self, a):
+        """Execute any platform tool directly for testing."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        payload = {
+            "tool_name": a.get("tool_name", ""),
+            "tool_input": a.get("tool_input", {}),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{AGENT_ENGINE_URL}/agents/tools/execute",
+                    headers=self.ws_db._headers, json=payload,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Execute failed: {resp.status_code} {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Provider & Metrics ──
+    async def _tool_list_providers(self, a):
+        """List all available LLM providers and their status."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/providers",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Failed: {resp.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def _tool_get_agent_metrics(self, a):
+        """Get agent performance metrics."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/{a['agent_id']}/metrics",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Failed: {resp.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Schedule Management ──
+    async def _tool_list_schedules(self, a):
+        """List all schedules for an agent."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    f"{AGENT_ENGINE_URL}/agents/{a['agent_id']}/schedules",
+                    headers=self.ws_db._headers,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                return {"error": f"Failed: {resp.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
     # ── Other ──
     async def _tool_open_interface_editor(self, a): return {"status": "editor_opened", "agent_id": a["agent_id"]}
     async def _tool_present_options(self, a):
