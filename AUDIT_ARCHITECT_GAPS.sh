@@ -295,10 +295,48 @@
 # Files changed: src/builder/builder.py (new methods: _pre_build_research,
 #   _post_build_test_run, _generate_post_build_offers; removed dead json import)
 #
-# PHASE 3: SSE streaming integration — TODO
-# [ ] Connect to /sessions/{id}/sse to monitor execution live
-# [ ] Stream progress back to user through architect's SSE
-# [ ] React to failures in real-time, auto-retry
+# PHASE 3: Multi-step interactive build pipeline — COMPLETED 2026-04-22
+# Problem: Architect was dumping everything in ONE LLM call — no interaction,
+#   no research, no plan review, no confirmation. Just "build_agent" immediately.
+# Solution: Code-driven multi-step pipeline replaces single LLM tool-calling loop.
+#
+# [x] BuildPipeline class: src/orchestrator/build_pipeline.py
+#     7 structured phases, each emitting SSE events for live streaming:
+#       Phase 1: RESEARCH — parallel checks (credits, integrations, memory, existing agents)
+#       Phase 2: PLAN — LLM generates structured plan (name, goal, tools, model, temp, risks)
+#       Phase 3: VERIFY — test provider health, check tool connections/OAuth status
+#       Phase 4: PROMPT — generate agent system prompt via neural type classifier
+#       Phase 5: BUILD — create agent (or update if duplicate detected)
+#       Phase 6: TEST — start test session, poll for results, stream live
+#       Phase 7: OFFERS — suggest schedule, alerts, run now, marketplace
+#
+# [x] Build intent detection: regex patterns in orchestrator detect "build/create agent"
+#     → routes to pipeline instead of LLM tool-calling loop
+#
+# [x] Pipeline state persistence across messages:
+#     - _pipeline, _pipeline_phase, _pipeline_plan stored on Orchestrator
+#     - Phases: waiting_confirm, waiting_adjustment, waiting_post_build
+#     - User can adjust plan settings, change tools/model, cancel
+#     - Only builds AFTER explicit user confirmation
+#
+# [x] Plan adjustment: LLM interprets user adjustment requests, updates plan JSON
+#     - Re-presents updated plan for re-confirmation
+#
+# [x] Prompt hardening: rules.py (always-injected) + dispatching.py both enforce
+#     mandatory confirmation before build_agent
+#
+# [x] Duplicate detection: if agent name matches existing, offers update instead
+#
+# Files changed:
+#   NEW: src/orchestrator/build_pipeline.py (BuildPipeline class, 533 lines)
+#   MODIFIED: src/orchestrator/orchestrator.py (pipeline integration, intent detection)
+#   MODIFIED: src/prompts/modules/rules.py (mandatory confirmation rule)
+#   MODIFIED: src/prompts/modules/dispatching.py (strict 4-step build flow)
+#   REMOVED: dead _is_pipeline_continuation function
+#
+# PHASE 4: Agent session stop/cancel — TODO
+# [ ] Add stop_session endpoint call from frontend Sessions panel
+# [ ] Wire cancel button to Agent Engine /agents/sessions/{id}/stop
 #
 
 echo "This is a report file. Read it, don't run it."
