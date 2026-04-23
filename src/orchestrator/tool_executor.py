@@ -522,6 +522,238 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
+    # ── Generic Agent Engine API caller ──
+    async def _engine_api(self, method: str, path: str, json_body=None, timeout: float = 15.0):
+        """Generic helper to call any Agent Engine endpoint."""
+        import httpx
+        from src.core.config import AGENT_ENGINE_URL
+        url = f"{AGENT_ENGINE_URL}/agents{path}"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                if method == "GET":
+                    resp = await client.get(url, headers=self.ws_db._headers)
+                elif method == "POST":
+                    resp = await client.post(url, headers=self.ws_db._headers, json=json_body or {})
+                elif method == "PATCH":
+                    resp = await client.patch(url, headers=self.ws_db._headers, json=json_body or {})
+                elif method == "PUT":
+                    resp = await client.put(url, headers=self.ws_db._headers, json=json_body or {})
+                elif method == "DELETE":
+                    resp = await client.delete(url, headers=self.ws_db._headers)
+                else:
+                    return {"error": f"Unknown method: {method}"}
+                if resp.status_code in (200, 201):
+                    try:
+                        return resp.json()
+                    except Exception:
+                        return {"status": "ok", "text": resp.text[:500]}
+                return {"error": f"API {method} {path} returned {resp.status_code}: {resp.text[:200]}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # ── Tool Classifier (neural) ──
+    async def _tool_predict_tools(self, a):
+        return await self._engine_api("POST", "/tools/classifier/predict",
+                                       {"goal": a.get("goal", ""), "n": a.get("n", 10)})
+    async def _tool_retrain_tool_classifier(self, a):
+        return await self._engine_api("POST", "/tools/classifier/retrain",
+                                       {"custom_samples": a.get("custom_samples", [])})
+    async def _tool_get_tool_classifier_stats(self, a):
+        return await self._engine_api("GET", "/tools/classifier/stats")
+    async def _tool_add_custom_tools(self, a):
+        return await self._engine_api("POST", "/tools/classifier/add-custom-tools",
+                                       {"tools": a.get("tools", [])})
+    async def _tool_get_tool_result(self, a):
+        return await self._engine_api("GET", f"/tools/result/{a['task_id']}")
+
+    # ── Platform Metrics ──
+    async def _tool_get_platform_metrics(self, a):
+        return await self._engine_api("GET", "/metrics")
+    async def _tool_get_metrics_summary(self, a):
+        return await self._engine_api("GET", "/metrics/summary")
+
+    # ── Schedule Management ──
+    async def _tool_update_schedule(self, a):
+        body = {k: v for k, v in a.items() if k != "schedule_id" and v}
+        return await self._engine_api("PATCH", f"/schedules/{a['schedule_id']}", body)
+    async def _tool_delete_schedule(self, a):
+        return await self._engine_api("DELETE", f"/schedules/{a['schedule_id']}")
+
+    # ── Triggers & Webhooks ──
+    async def _tool_create_trigger(self, a):
+        return await self._engine_api("POST", f"/{a['agent_id']}/triggers", a)
+    async def _tool_list_triggers(self, a):
+        return await self._engine_api("GET", f"/{a['agent_id']}/triggers")
+    async def _tool_fire_webhook_trigger(self, a):
+        return await self._engine_api("POST", f"/triggers/webhook/{a['trigger_id']}",
+                                       a.get("payload", {}))
+
+    # ── Anomaly Detection ──
+    async def _tool_list_anomaly_triggers(self, a):
+        return await self._engine_api("GET", "/anomaly-triggers")
+    async def _tool_create_anomaly_trigger(self, a):
+        return await self._engine_api("POST", "/anomaly-triggers", a)
+    async def _tool_delete_anomaly_trigger(self, a):
+        return await self._engine_api("DELETE", f"/anomaly-triggers/{a['trigger_id']}")
+    async def _tool_fire_anomaly_trigger(self, a):
+        return await self._engine_api("POST", "/anomaly-triggers/fire",
+                                       {"trigger_id": a.get("trigger_id", "")})
+
+    # ── Session Deep Inspection ──
+    async def _tool_get_session_detail(self, a):
+        return await self._engine_api("GET", f"/sessions/{a['session_id']}")
+    async def _tool_get_session_trace(self, a):
+        return await self._engine_api("GET", f"/sessions/{a['session_id']}/trace")
+    async def _tool_submit_session_feedback(self, a):
+        return await self._engine_api("POST", f"/sessions/{a['session_id']}/feedback",
+                                       {"rating": a.get("rating"), "feedback": a.get("feedback", "")})
+    async def _tool_stream_session_sse(self, a):
+        return {"info": "SSE streaming not available via tool call. Use GET /sessions/{session_id}/sse directly.",
+                "session_id": a["session_id"]}
+
+    # ── Agent Versions ──
+    async def _tool_get_agent_versions(self, a):
+        return await self._engine_api("GET", f"/{a['agent_id']}/versions")
+
+    # ── Agent Mode ──
+    async def _tool_set_agent_mode(self, a):
+        return await self._engine_api("PATCH", f"/{a['agent_id']}/mode",
+                                       {"mode": a.get("mode", "smart")})
+    async def _tool_unarchive_agent(self, a):
+        return await self._engine_api("PATCH", f"/{a['agent_id']}/unarchive")
+
+    # ── Templates ──
+    async def _tool_list_templates(self, a):
+        return await self._engine_api("GET", "/templates")
+    async def _tool_instantiate_template(self, a):
+        return await self._engine_api("POST", f"/templates/{a['template_id']}/instantiate",
+                                       {"name": a.get("name", ""), "goal": a.get("goal", "")})
+
+    # ── Federation ──
+    async def _tool_list_federated_agents(self, a):
+        return await self._engine_api("GET", "/federation/agents")
+    async def _tool_register_federation(self, a):
+        return await self._engine_api("POST", "/federation/register", a)
+    async def _tool_federation_heartbeat(self, a):
+        return await self._engine_api("POST", "/federation/heartbeat", a)
+    async def _tool_disconnect_federation(self, a):
+        return await self._engine_api("POST", f"/federation/disconnect/{a['agent_id']}")
+    async def _tool_submit_federation_step(self, a):
+        return await self._engine_api("POST", f"/federation/tasks/{a['task_id']}/step",
+                                       a.get("step_data", {}))
+    async def _tool_submit_federation_result(self, a):
+        return await self._engine_api("POST", f"/federation/tasks/{a['task_id']}/result",
+                                       a.get("result", {}))
+    async def _tool_poll_federation_tasks(self, a):
+        return await self._engine_api("GET", "/federation/tasks/poll")
+
+    # ── Governance & Compliance ──
+    async def _tool_evaluate_governance(self, a):
+        return await self._engine_api("POST", "/governance/evaluate",
+                                       {"action": a.get("action", ""), "context": a.get("context", {})})
+    async def _tool_get_governance_audit_trail(self, a):
+        return await self._engine_api("GET", "/governance/audit-trail")
+    async def _tool_get_compliance_report(self, a):
+        return await self._engine_api("GET", "/governance/compliance-report")
+    async def _tool_get_compliance_score(self, a):
+        return await self._engine_api("GET", "/compliance/score")
+    async def _tool_get_compliance_evidence(self, a):
+        return await self._engine_api("GET", "/compliance/evidence-checklist")
+    async def _tool_export_compliance_audit(self, a):
+        return await self._engine_api("GET", "/compliance/audit-export")
+
+    # ── Teams & Collaboration ──
+    async def _tool_list_teams(self, a):
+        return await self._engine_api("GET", "/teams")
+    async def _tool_create_team(self, a):
+        return await self._engine_api("POST", "/teams", a)
+    async def _tool_get_team(self, a):
+        return await self._engine_api("GET", f"/teams/{a['team_id']}")
+    async def _tool_update_team(self, a):
+        body = {k: v for k, v in a.items() if k != "team_id" and v}
+        return await self._engine_api("PUT", f"/teams/{a['team_id']}", body)
+    async def _tool_delete_team(self, a):
+        return await self._engine_api("DELETE", f"/teams/{a['team_id']}")
+    async def _tool_get_team_members(self, a):
+        return await self._engine_api("GET", f"/teams/{a['team_id']}/members")
+    async def _tool_get_team_ownership(self, a):
+        return await self._engine_api("GET", f"/teams/{a['team_id']}/ownership")
+    async def _tool_get_team_workflows(self, a):
+        return await self._engine_api("GET", f"/teams/{a['team_id']}/workflows")
+    async def _tool_cancel_team_workflow(self, a):
+        return await self._engine_api("POST", f"/teams/workflows/{a['workflow_id']}/cancel")
+    async def _tool_archive_team(self, a):
+        return await self._engine_api("PATCH", f"/teams/{a['team_id']}/archive")
+    async def _tool_unarchive_team(self, a):
+        return await self._engine_api("PATCH", f"/teams/{a['team_id']}/unarchive")
+    async def _tool_mint_team_nft(self, a):
+        return await self._engine_api("POST", f"/teams/{a['team_id']}/mint-nft")
+    async def _tool_rent_team(self, a):
+        return await self._engine_api("POST", f"/teams/{a['team_id']}/rent")
+    async def _tool_transfer_team(self, a):
+        return await self._engine_api("POST", f"/teams/{a['team_id']}/transfer",
+                                       {"new_owner": a.get("new_owner", "")})
+    async def _tool_get_team_rentals(self, a):
+        return await self._engine_api("GET", f"/teams/{a['team_id']}/rentals")
+    async def _tool_get_my_rentals(self, a):
+        return await self._engine_api("GET", "/teams/my-rentals")
+
+    # ── Marketplace & Publishing ──
+    async def _tool_get_marketplace(self, a):
+        return await self._engine_api("GET", "/marketplace")
+    async def _tool_publish_agent(self, a):
+        return await self._engine_api("POST", f"/{a['agent_id']}/publish")
+    async def _tool_marketplace_publish(self, a):
+        return await self._engine_api("POST", f"/{a['agent_id']}/marketplace-publish", a)
+    async def _tool_marketplace_unpublish(self, a):
+        return await self._engine_api("POST", f"/{a['agent_id']}/marketplace-unpublish")
+    async def _tool_publish_agent_api(self, a):
+        return await self._engine_api("POST", f"/{a['agent_id']}/publish-api",
+                                       {"slug": a.get("slug", "")})
+    async def _tool_unpublish_agent_api(self, a):
+        return await self._engine_api("POST", f"/{a['agent_id']}/unpublish-api")
+    async def _tool_get_published_apis(self, a):
+        return await self._engine_api("GET", f"/agents/{a['agent_id']}/published-apis")
+    async def _tool_delete_published_api(self, a):
+        return await self._engine_api("DELETE", f"/published-apis/{a['pub_id']}")
+    async def _tool_call_public_api(self, a):
+        return await self._engine_api("POST", f"/public/{a['slug']}/run",
+                                       a.get("input", {}), timeout=30.0)
+
+    # ── Learning & Recommendations ──
+    async def _tool_get_learning_patterns(self, a):
+        return await self._engine_api("GET", "/learning/patterns")
+    async def _tool_get_learning_recommendations(self, a):
+        return await self._engine_api("GET", f"/learning/recommendations/{a['agent_id']}")
+    async def _tool_get_learning_stats(self, a):
+        return await self._engine_api("GET", "/learning/stats")
+    async def _tool_get_agent_knowledge(self, a):
+        return await self._engine_api("GET", f"/{a['agent_id']}/collective-knowledge")
+
+    # ── Limits & Capabilities ──
+    async def _tool_get_limits(self, a):
+        return await self._engine_api("GET", "/limits")
+    async def _tool_update_limit(self, a):
+        return await self._engine_api("PUT", f"/limits/{a['limit_id']}",
+                                       {"value": a.get("value")})
+    async def _tool_get_capabilities(self, a):
+        return await self._engine_api("GET", "/capabilities")
+
+    # ── Watchdog ──
+    async def _tool_get_watchdog_status(self, a):
+        return await self._engine_api("GET", "/watchdog/status")
+
+    # ── Repo to Agent ──
+    async def _tool_repo_to_agent(self, a):
+        return await self._engine_api("POST", "/repo-to-agent", a, timeout=60.0)
+    async def _tool_analyze_repo(self, a):
+        return await self._engine_api("POST", "/repo-to-agent/analyze",
+                                       {"repo_url": a.get("repo_url", "")}, timeout=30.0)
+
+    # ── Available Tools ──
+    async def _tool_get_available_tools(self, a):
+        return await self._engine_api("GET", "/available-tools")
+
     # ── Other ──
     async def _tool_open_interface_editor(self, a): return {"status": "editor_opened", "agent_id": a["agent_id"]}
     async def _tool_present_options(self, a):

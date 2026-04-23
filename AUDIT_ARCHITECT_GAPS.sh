@@ -250,6 +250,18 @@
 # [x] Builder: neural tool selection from Agent Engine's /tools/classifier/predict
 #     (74+ tools) instead of hardcoded 13
 #
+# PHASE 1c: FULL Engine Coverage — COMPLETED 2026-04-22
+# [x] 125 tool definitions (was 51) — covers ALL 101 Agent Engine endpoints
+# [x] 128 tool handlers — generic _engine_api() helper for clean HTTP proxy
+# [x] 14 classifier groups (was 8) + none: build, run, schedule, inspect,
+#     memory, plan, delegate, workspace, teams, marketplace, federation,
+#     governance, learning, advanced
+# [x] 223 training samples (was 180)
+# [x] Agent Engine tool registry confirmed at 161 tools (not 74)
+# [x] New endpoint categories: triggers, anomaly, sessions (deep), versions,
+#     mode, templates, federation, governance, compliance, teams, marketplace,
+#     publishing, learning, limits, capabilities, watchdog, repo-to-agent
+#
 # PHASE 2: Intelligence pipeline — TODO
 # [ ] Pre-build research: check integrations, providers, credits, memory
 # [ ] Provider health check: test LLM before assigning to agent

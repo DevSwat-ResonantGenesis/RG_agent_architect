@@ -1,19 +1,25 @@
 """Training data for the Architect's own neural tool classifier.
 
-Groups the architect's 53 tools into intent clusters so only the relevant
+Groups the architect's 125 tools into intent clusters so only the relevant
 subset gets injected into the LLM prompt per user message.
 
 Each sample: (user_message, correct_tool_group)
 
-Tool groups (8 clusters):
-  build     — create/build/modify agents, check tools, classify
-  run       — execute/stop/cancel/approve sessions, emergency stop
-  schedule  — create/list/update/delete schedules and triggers
-  inspect   — view agents, sessions, steps, metrics, providers
-  memory    — user memory, agent memory, RAG, insights
-  plan      — TODO tasks, brainstorm, workspace plan
-  delegate  — delegate to other agents, multi-agent workflows
-  workspace — workspace name, databases, credits, integrations, time
+Tool groups (14 clusters + none):
+  build       — create/build/modify agents, check tools, classify, repo-to-agent
+  run         — execute/stop/cancel/approve sessions, emergency stop
+  schedule    — create/list/update/delete schedules, triggers, webhooks
+  inspect     — view agents, sessions, steps, metrics, providers, versions
+  memory      — user memory, agent memory, RAG, insights, knowledge
+  plan        — TODO tasks, brainstorm, workspace plan
+  delegate    — delegate to other agents, multi-agent workflows
+  workspace   — workspace name, databases, credits, integrations, time
+  teams       — team management, members, workflows, NFTs, rentals
+  marketplace — publish/unpublish agents, marketplace listings, APIs
+  federation  — federated agents, cross-node tasks, heartbeat
+  governance  — compliance, audit trail, governance evaluation
+  learning    — patterns, recommendations, feedback, classifier
+  advanced    — anomaly detection, templates, limits, direct tool execution
 """
 from typing import List, Tuple
 
@@ -195,6 +201,114 @@ def get_training_data() -> List[TrainingSample]:
         ("check my billing", _w),
         ("delete all agents", _w),
         ("clean up the workspace", _w),
+    ]
+
+    # ── BUILD extras: repo-to-agent, templates ──
+    samples += [
+        ("convert this github repo to an agent", _b),
+        ("analyze this repository", _b),
+        ("turn my github project into an agent", _b),
+        ("import agent from repo", _b),
+    ]
+
+    # ── TEAMS: team management, members, workflows, NFTs ──
+    _tm = "teams"
+    samples += [
+        ("create a new team", _tm),
+        ("show me my teams", _tm),
+        ("add a member to my team", _tm),
+        ("list team members", _tm),
+        ("delete the marketing team", _tm),
+        ("update team settings", _tm),
+        ("what team workflows are running", _tm),
+        ("cancel the team workflow", _tm),
+        ("archive the old team", _tm),
+        ("restore the archived team", _tm),
+        ("mint an NFT for my team", _tm),
+        ("rent access to this team", _tm),
+        ("transfer team ownership", _tm),
+        ("check team rental status", _tm),
+        ("show my rentals", _tm),
+    ]
+
+    # ── MARKETPLACE: publish, list, APIs ──
+    _mk = "marketplace"
+    samples += [
+        ("publish my agent to the marketplace", _mk),
+        ("list marketplace agents", _mk),
+        ("remove my agent from marketplace", _mk),
+        ("how much should I charge for my agent", _mk),
+        ("publish my agent as an API", _mk),
+        ("unpublish the agent API", _mk),
+        ("show published APIs for my agent", _mk),
+        ("delete the published API", _mk),
+        ("call a public agent API", _mk),
+        ("show marketplace listings", _mk),
+        ("I want to sell my agent", _mk),
+        ("make my agent available to others", _mk),
+    ]
+
+    # ── FEDERATION: cross-node agents ──
+    _fd = "federation"
+    samples += [
+        ("show federated agents", _fd),
+        ("register for federation", _fd),
+        ("connect to another node", _fd),
+        ("disconnect federated agent", _fd),
+        ("check federation status", _fd),
+        ("send federation heartbeat", _fd),
+        ("poll for federation tasks", _fd),
+        ("submit federation result", _fd),
+        ("list agents from other nodes", _fd),
+        ("federate my agent", _fd),
+    ]
+
+    # ── GOVERNANCE: compliance, audit ──
+    _gv = "governance"
+    samples += [
+        ("check compliance score", _gv),
+        ("show the audit trail", _gv),
+        ("generate compliance report", _gv),
+        ("evaluate governance for this action", _gv),
+        ("export audit data", _gv),
+        ("show evidence checklist", _gv),
+        ("is this action compliant", _gv),
+        ("what's our compliance status", _gv),
+        ("review governance policies", _gv),
+        ("audit log for my agents", _gv),
+    ]
+
+    # ── LEARNING: patterns, recommendations, feedback ──
+    _ln = "learning"
+    samples += [
+        ("what patterns have my agents learned", _ln),
+        ("get recommendations for my agent", _ln),
+        ("show learning statistics", _ln),
+        ("what has the system learned", _ln),
+        ("give feedback on that session", _ln),
+        ("rate the last run", _ln),
+        ("how can I improve my agent", _ln),
+        ("show classifier stats", _ln),
+        ("retrain the tool classifier", _ln),
+        ("what knowledge has my agent accumulated", _ln),
+        ("suggest improvements for my agents", _ln),
+    ]
+
+    # ── ADVANCED: anomaly, templates, limits, direct execution ──
+    _ad = "advanced"
+    samples += [
+        ("set up anomaly detection", _ad),
+        ("create an anomaly trigger", _ad),
+        ("list anomaly triggers", _ad),
+        ("delete the anomaly trigger", _ad),
+        ("fire the anomaly trigger for testing", _ad),
+        ("show available templates", _ad),
+        ("create agent from template", _ad),
+        ("what are the platform limits", _ad),
+        ("update the rate limit", _ad),
+        ("execute this tool directly", _ad),
+        ("test the web_search tool", _ad),
+        ("get the async tool result", _ad),
     ]
 
     # ── GENERAL CHAT (no tools needed) ──

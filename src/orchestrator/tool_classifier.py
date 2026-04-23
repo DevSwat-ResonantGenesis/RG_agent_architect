@@ -41,28 +41,34 @@ logger = logging.getLogger(__name__)
 TOOL_GROUPS: Dict[str, List[str]] = {
     "build": [
         "build_agent", "modify_agent", "continue_build", "message_build",
-        "list_engine_tools", "execute_tool", "update_agent_config",
+        "list_engine_tools", "execute_tool", "predict_tools", "update_agent_config",
         "update_agent_prompt", "get_agent_prompt", "check_integrations",
         "check_credits", "workspace_snapshot", "present_options",
+        "list_providers", "get_available_tools", "set_agent_mode",
+        "repo_to_agent", "analyze_repo",
     ],
     "run": [
         "run_agent", "stop_run", "cancel_session", "emergency_stop",
         "approve_step", "get_pending_approvals", "workspace_snapshot",
-        "get_agent_sessions",
+        "get_agent_sessions", "stream_session_sse",
     ],
     "schedule": [
-        "create_schedule", "set_trigger", "list_schedules",
-        "workspace_snapshot", "present_options",
+        "create_schedule", "set_trigger", "list_schedules", "update_schedule",
+        "delete_schedule", "create_trigger", "list_triggers",
+        "fire_webhook_trigger", "workspace_snapshot", "present_options",
     ],
     "inspect": [
         "workspace_snapshot", "agent_snapshot", "run_snapshot",
-        "get_agent_sessions", "get_session_steps", "get_agent_metrics",
-        "list_providers", "list_engine_tools",
+        "get_agent_sessions", "get_session_steps", "get_session_detail",
+        "get_session_trace", "get_agent_metrics", "get_platform_metrics",
+        "get_metrics_summary", "get_agent_versions", "list_providers",
+        "list_engine_tools", "get_watchdog_status", "get_capabilities",
+        "get_limits", "get_available_tools",
     ],
     "memory": [
         "get_user_memory", "update_user_memory", "get_agent_memory",
         "get_dual_memory", "ask_memory", "store_insight",
-        "retrieve_architect_context",
+        "retrieve_architect_context", "get_agent_knowledge",
     ],
     "plan": [
         "create_task", "list_tasks", "update_task", "brainstorm",
@@ -76,7 +82,42 @@ TOOL_GROUPS: Dict[str, List[str]] = {
         "set_workspace_name", "list_workspace_databases", "list_workspace_tools",
         "get_credits_info", "check_credits", "check_integrations",
         "get_current_time", "delete_agent", "delete_all_agents",
-        "workspace_snapshot", "present_options",
+        "workspace_snapshot", "present_options", "unarchive_agent",
+    ],
+    "teams": [
+        "list_teams", "create_team", "get_team", "update_team", "delete_team",
+        "get_team_members", "get_team_ownership", "get_team_workflows",
+        "cancel_team_workflow", "archive_team", "unarchive_team",
+        "mint_team_nft", "rent_team", "transfer_team",
+        "get_team_rentals", "get_my_rentals",
+    ],
+    "marketplace": [
+        "get_marketplace", "publish_agent", "marketplace_publish",
+        "marketplace_unpublish", "publish_agent_api", "unpublish_agent_api",
+        "get_published_apis", "delete_published_api", "call_public_api",
+    ],
+    "federation": [
+        "list_federated_agents", "register_federation", "federation_heartbeat",
+        "disconnect_federation", "submit_federation_step",
+        "submit_federation_result", "poll_federation_tasks",
+    ],
+    "governance": [
+        "evaluate_governance", "get_governance_audit_trail",
+        "get_compliance_report", "get_compliance_score",
+        "get_compliance_evidence", "export_compliance_audit",
+    ],
+    "learning": [
+        "get_learning_patterns", "get_learning_recommendations",
+        "get_learning_stats", "get_agent_knowledge",
+        "submit_session_feedback", "get_tool_classifier_stats",
+        "retrain_tool_classifier", "add_custom_tools",
+    ],
+    "advanced": [
+        "list_anomaly_triggers", "create_anomaly_trigger",
+        "delete_anomaly_trigger", "fire_anomaly_trigger",
+        "list_templates", "instantiate_template",
+        "get_tool_result", "update_limit",
+        "predict_tools", "execute_tool",
     ],
 }
 
@@ -238,14 +279,20 @@ class ArchitectToolClassifier:
 # ── Keyword fallback when neural model unavailable ──
 
 _FALLBACK_KEYWORDS = {
-    "build": ["create", "build", "make", "new agent", "modify", "add tool", "remove tool", "change model", "update prompt", "improve"],
+    "build": ["create", "build", "make", "new agent", "modify", "add tool", "remove tool", "change model", "update prompt", "improve", "repo", "github"],
     "run": ["run", "execute", "start", "stop", "cancel", "kill", "emergency", "halt", "abort", "approve", "reject"],
-    "schedule": ["schedule", "cron", "daily", "hourly", "weekly", "trigger", "recurring", "automation"],
-    "inspect": ["show", "list", "agents", "sessions", "steps", "metrics", "performance", "provider", "history", "trace", "versions"],
+    "schedule": ["schedule", "cron", "daily", "hourly", "weekly", "trigger", "recurring", "automation", "webhook"],
+    "inspect": ["show", "list agents", "sessions", "steps", "metrics", "performance", "provider", "history", "trace", "versions", "watchdog", "capabilities"],
     "memory": ["remember", "memory", "recall", "learned", "insight", "knowledge", "context"],
     "plan": ["task", "todo", "plan", "brainstorm", "idea", "priority"],
     "delegate": ["delegate", "ask my", "use my", "chain", "tell my agent"],
     "workspace": ["credit", "billing", "integration", "connected", "workspace", "rename", "delete all", "clean up", "time"],
+    "teams": ["team", "member", "workflow", "nft", "rent", "transfer", "ownership"],
+    "marketplace": ["marketplace", "publish", "sell", "listing", "api", "public api", "unpublish"],
+    "federation": ["federat", "node", "cross-node", "heartbeat", "poll task"],
+    "governance": ["compliance", "audit", "governance", "evidence", "compliant", "policy"],
+    "learning": ["pattern", "recommendation", "feedback", "improve", "classifier", "retrain", "learning stats"],
+    "advanced": ["anomaly", "template", "limit", "rate limit", "execute tool", "test tool"],
 }
 
 
