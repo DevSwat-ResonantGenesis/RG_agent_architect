@@ -231,24 +231,32 @@
 # 5. ACTION PLAN — Priority fixes
 # ============================================================================
 #
-# PHASE 1: Critical tool gaps (must have)
-# [ ] Add cancel_session tool
-# [ ] Add emergency_stop tool
-# [ ] Add approve_step tool
-# [ ] Add list_all_engine_tools (full 74-tool registry)
-# [ ] Add execute_tool_direct (test any tool)
-# [ ] Add list_providers (check which LLMs work)
-# [ ] Add list_schedules / delete_schedule
-# [ ] Add get_agent_metrics
+# PHASE 1: Critical tool gaps — COMPLETED 2026-04-22
+# [x] Add cancel_session tool
+# [x] Add emergency_stop tool
+# [x] Add approve_step tool
+# [x] Add get_pending_approvals tool
+# [x] Add list_engine_tools (full 74-tool registry)
+# [x] Add execute_tool (test any tool directly)
+# [x] Add list_providers (check which LLMs work)
+# [x] Add list_schedules
+# [x] Add get_agent_metrics
 #
-# PHASE 2: Intelligence pipeline
+# PHASE 1b: Neural Tool Classifier — COMPLETED 2026-04-22
+# [x] ArchitectToolClassifier: groups 53 tools into 8 intent clusters
+# [x] 180+ synthetic training samples
+# [x] Smart injection: only send relevant tools per message (not all 53)
+# [x] Keyword fallback when neural model unavailable
+# [x] Builder: neural tool selection from Agent Engine's /tools/classifier/predict
+#     (74+ tools) instead of hardcoded 13
+#
+# PHASE 2: Intelligence pipeline — TODO
 # [ ] Pre-build research: check integrations, providers, credits, memory
 # [ ] Provider health check: test LLM before assigning to agent
-# [ ] Smart tool selection: use neural classifier instead of hardcoded 13
 # [ ] Post-build test run: execute agent, check result, iterate
 # [ ] Post-build offer: schedule, alerts, improvements
 #
-# PHASE 3: SSE streaming integration
+# PHASE 3: SSE streaming integration — TODO
 # [ ] Connect to /sessions/{id}/sse to monitor execution live
 # [ ] Stream progress back to user through architect's SSE
 # [ ] React to failures in real-time, auto-retry
