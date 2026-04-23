@@ -272,11 +272,28 @@
 # [x] Agent Engine: 203 tools, 1030 samples, accuracy=0.8874, model v1 saved to DB
 # [x] Agent Engine: auto-detected stale model (200→203 classes), retrained
 #
-# PHASE 2: Intelligence pipeline — TODO
-# [ ] Pre-build research: check integrations, providers, credits, memory
-# [ ] Provider health check: test LLM before assigning to agent
-# [ ] Post-build test run: execute agent, check result, iterate
-# [ ] Post-build offer: schedule, alerts, improvements
+# PHASE 2: Intelligence pipeline — COMPLETED 2026-04-22
+# [x] Pre-build research: 4 parallel checks (credits, integrations, provider, memory)
+#     - Credits: blocks build if exhausted, warns if < 100 remaining
+#     - Integrations: queries Agent Engine /agents/integrations
+#     - Memory: asks RAG "any past experience building agents for [goal]"
+#     - All run in asyncio.gather() — no serial blocking
+# [x] Provider health check: sends "Reply with OK" to assigned model
+#     - If empty or error → auto-switches to DEFAULT_MODEL fallback
+#     - Warning emitted via SSE so user sees the switch
+# [x] Post-build test run + auto-retry:
+#     - Creates test session via /agents/{id}/sessions (max_steps=3, test_mode=True)
+#     - Polls /agents/sessions/{id} every 5s for up to 60s
+#     - On failure: auto-retries once, reports both attempts
+#     - On success: reports steps + duration
+# [x] Post-build offers: intelligent suggestions based on goal keywords
+#     - Schedule: detected via "monitor", "daily", "track", "alert", etc.
+#     - Alerts: detected via "alert", "notify", "detect", "monitor"
+#     - Team: detected via "team", "collaborat", "share"
+#     - Marketplace: always offered
+#     - Improvement: LLM-generated 1-sentence suggestion (FAST_MODEL)
+# Files changed: src/builder/builder.py (new methods: _pre_build_research,
+#   _post_build_test_run, _generate_post_build_offers; removed dead json import)
 #
 # PHASE 3: SSE streaming integration — TODO
 # [ ] Connect to /sessions/{id}/sse to monitor execution live
