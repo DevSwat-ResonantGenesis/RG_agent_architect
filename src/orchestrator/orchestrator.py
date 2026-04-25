@@ -62,10 +62,19 @@ class Orchestrator:
         self.safety = get_safety()
         self._progress_queue: Optional[asyncio.Queue] = None
         self._user_api_keys: Optional[Dict[str, str]] = None
+        # Auth context forwarded from chat service
+        self._is_superuser: bool = False
+        self._unlimited_credits: bool = False
+        self._user_role: str = "user"
         # Build pipeline state — persists across messages
         self._pipeline: Optional[BuildPipeline] = None
         self._pipeline_phase: Optional[str] = None  # waiting_confirm, waiting_prompt_review, etc.
         self._pipeline_plan: Optional[Dict] = None
+
+    def _make_ws_db(self) -> "WorkspaceDB":
+        from src.services.database.workspace_db import WorkspaceDB
+        return WorkspaceDB(self.workspace_id, is_superuser=self._is_superuser,
+                           unlimited_credits=self._unlimited_credits, user_role=self._user_role)
 
     async def initialize_session(self):
         self.context = await fetch_workspace_context(self.workspace_id, user_id=self.user_id)
@@ -158,6 +167,7 @@ class Orchestrator:
         if not self.context:
             await self.initialize_session()
         self.tool_executor._user_api_keys = self._user_api_keys
+        self.tool_executor.ws_db = self._make_ws_db()
         agents_exist = bool(self.context.get("workspace", {}).get("agents", []))
         mode = classify_mode(user_message, agents_exist)
         self.history.append({"role": "user", "content": user_message})
@@ -187,6 +197,7 @@ class Orchestrator:
         if not self.context:
             await self.initialize_session()
         self.tool_executor._user_api_keys = self._user_api_keys
+        self.tool_executor.ws_db = self._make_ws_db()
 
         agents_exist = bool(self.context.get("workspace", {}).get("agents", []))
         mode = classify_mode(user_message, agents_exist)
@@ -249,8 +260,7 @@ class Orchestrator:
         Runs ALL phases in one continuous stream with no stops.
         Streams formatted progress as one rich message.
         """
-        from src.services.database.workspace_db import WorkspaceDB
-        ws_db = WorkspaceDB(self.workspace_id, self.user_id)
+        ws_db = self._make_ws_db()
 
         pipeline = BuildPipeline(
             workspace_id=self.workspace_id,
@@ -473,8 +483,10 @@ class Orchestrator:
             logger.warning(f"[Orch] Tool classifier failed, using all tools: {e}")
 
         # Filter ORCHESTRATOR_TOOLS to only the selected subset
+        # Always include present_options so the LLM can show interactive buttons
+        ALWAYS_INCLUDE = {"present_options", "get_current_time", "workspace_snapshot"}
         if selected_tool_names and predicted_group != "none":
-            name_set = set(selected_tool_names)
+            name_set = set(selected_tool_names) | ALWAYS_INCLUDE
             selected_tools = [t for t in ORCHESTRATOR_TOOLS
                               if t["function"]["name"] in name_set]
             # Safety: if filter produced too few, fall back to all

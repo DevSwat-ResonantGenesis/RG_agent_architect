@@ -56,16 +56,16 @@ class ToolExecutor:
     # ── Build / Run ──
     async def _tool_build_agent(self, a):
         from src.builder.builder import Builder
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys).build(
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).build(
             name=a.get("name",""), goal=a.get("goal",""), icon=a.get("icon","🤖"),
             tools=a.get("tools", []), max_loops=a.get("max_loops", 30),
             temperature=a.get("temperature", 0.5), model=a.get("model", "groq/llama-3.3-70b-versatile"))
     async def _tool_continue_build(self, a):
         from src.builder.builder import Builder
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys).continue_build(a["agent_id"], a.get("instructions",""))
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).continue_build(a["agent_id"], a.get("instructions",""))
     async def _tool_message_build(self, a):
         from src.builder.builder import Builder
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys).message_build(a["agent_id"], a.get("message",""))
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).message_build(a["agent_id"], a.get("message",""))
     async def _tool_run_agent(self, a):
         from src.runner.runner import Runner
         return await Runner(self.workspace_id).run(a["agent_id"], a.get("goal"), user_id=self.user_id)
@@ -80,7 +80,7 @@ class ToolExecutor:
         if a.get("max_loops"): updates["max_loops"] = int(a["max_loops"])
         if a.get("temperature"): updates["temperature"] = float(a["temperature"])
         if a.get("model"): updates["model"] = a["model"]
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys).modify_agent(
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).modify_agent(
             a["agent_id"], add_tools=add_tools, remove_tools=remove_tools, **updates)
 
     # ── Scheduling ──

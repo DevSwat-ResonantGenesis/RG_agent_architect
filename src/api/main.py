@@ -2,7 +2,7 @@
 import json
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -109,18 +109,26 @@ def _inject_conversation_history(orch: Orchestrator, req: MessageRequest):
         orch.history.append({"role": "assistant", "content": req.context[:1000]})
 
 
+def _apply_auth_context(orch: Orchestrator, request: Request):
+    """Forward auth headers from chat service to orchestrator for downstream calls."""
+    orch._is_superuser = request.headers.get("x-is-superuser", "false").lower() in ("true", "1")
+    orch._unlimited_credits = request.headers.get("x-unlimited-credits", "false").lower() in ("true", "1")
+    orch._user_role = request.headers.get("x-user-role", "user")
+
+
 @app.post("/api/message")
-async def handle_message(req: MessageRequest):
+async def handle_message(req: MessageRequest, request: Request):
     """Synchronous JSON response (backward compatible)."""
     orch = get_orchestrator(req.workspace_id, req.user_id)
     if req.user_api_keys:
         orch._user_api_keys = req.user_api_keys
+    _apply_auth_context(orch, request)
     _inject_conversation_history(orch, req)
     return await orch.handle_message(req.message)
 
 
 @app.post("/api/message/stream")
-async def handle_message_stream(req: MessageRequest):
+async def handle_message_stream(req: MessageRequest, request: Request):
     """SSE streaming endpoint — yields real-time progress events.
 
     Event types: session_start, thinking, text, tool_call, tool_result,
@@ -132,6 +140,7 @@ async def handle_message_stream(req: MessageRequest):
         print(f"[Architect] BYOK keys received: {list(req.user_api_keys.keys())}", flush=True)
     else:
         print("[Architect] WARNING: No BYOK keys received from chat service", flush=True)
+    _apply_auth_context(orch, request)
     _inject_conversation_history(orch, req)
 
     async def event_generator():

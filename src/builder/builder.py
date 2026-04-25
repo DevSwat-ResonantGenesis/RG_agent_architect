@@ -38,10 +38,11 @@ TESTABLE_TOOLS = {
 class Builder:
     def __init__(self, workspace_id: str, user_id: str = "",
                  on_progress: Optional[Callable] = None,
-                 user_api_keys: Optional[Dict] = None):
+                 user_api_keys: Optional[Dict] = None,
+                 ws_db: Optional["WorkspaceDB"] = None):
         self.workspace_id = workspace_id
         self.user_id = user_id or workspace_id
-        self.ws_db = WorkspaceDB(workspace_id)
+        self.ws_db = ws_db or WorkspaceDB(workspace_id)
         self._on_progress = on_progress
         self._user_api_keys = user_api_keys
 
