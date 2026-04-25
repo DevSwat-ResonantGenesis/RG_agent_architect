@@ -129,6 +129,9 @@ async def handle_message_stream(req: MessageRequest):
     orch = get_orchestrator(req.workspace_id, req.user_id)
     if req.user_api_keys:
         orch._user_api_keys = req.user_api_keys
+        print(f"[Architect] BYOK keys received: {list(req.user_api_keys.keys())}", flush=True)
+    else:
+        print("[Architect] WARNING: No BYOK keys received from chat service", flush=True)
     _inject_conversation_history(orch, req)
 
     async def event_generator():

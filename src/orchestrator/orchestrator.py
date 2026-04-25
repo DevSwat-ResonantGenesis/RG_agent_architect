@@ -157,6 +157,7 @@ class Orchestrator:
     async def handle_message(self, user_message: str) -> Dict[str, Any]:
         if not self.context:
             await self.initialize_session()
+        self.tool_executor._user_api_keys = self._user_api_keys
         agents_exist = bool(self.context.get("workspace", {}).get("agents", []))
         mode = classify_mode(user_message, agents_exist)
         self.history.append({"role": "user", "content": user_message})
@@ -185,6 +186,7 @@ class Orchestrator:
 
         if not self.context:
             await self.initialize_session()
+        self.tool_executor._user_api_keys = self._user_api_keys
 
         agents_exist = bool(self.context.get("workspace", {}).get("agents", []))
         mode = classify_mode(user_message, agents_exist)
@@ -207,6 +209,7 @@ class Orchestrator:
             run_fn = self._run_loop(mode)
 
         result_future: asyncio.Future = asyncio.get_event_loop().create_future()
+        queue_ref = self._progress_queue  # local ref survives cleanup
 
         async def _run():
             try:
@@ -215,7 +218,8 @@ class Orchestrator:
             except Exception as e:
                 result_future.set_exception(e)
             finally:
-                await self._progress_queue.put(None)  # Sentinel
+                if queue_ref is not None:
+                    await queue_ref.put(None)  # Sentinel
 
         task = asyncio.create_task(_run())
 

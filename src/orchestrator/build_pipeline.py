@@ -179,6 +179,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
             resp = await call_llm(
                 messages=[{"role": "user", "content": plan_prompt}],
                 model=FAST_MODEL, max_tokens=2000, temperature=0.3,
+                user_api_keys=self._user_api_keys,
             )
             content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
 
@@ -242,6 +243,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
             test_resp = await call_llm(
                 messages=[{"role": "user", "content": "Reply with OK"}],
                 model=model, max_tokens=5, temperature=0,
+                user_api_keys=self._user_api_keys,
             )
             content = (test_resp.get("choices", [{}])[0]
                        .get("message", {}).get("content", ""))
@@ -332,7 +334,8 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         resp = await call_llm(messages=[
             {"role": "system", "content": builder_system},
             {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}"}
-        ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4)
+        ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4,
+            user_api_keys=self._user_api_keys)
         prompt = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
 
         if not prompt:
@@ -365,6 +368,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         builder = Builder(
             self.workspace_id, self.user_id,
             on_progress=_fwd_progress,
+            user_api_keys=self._user_api_keys,
         )
 
         # If duplicate, modify instead

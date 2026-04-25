@@ -37,11 +37,13 @@ TESTABLE_TOOLS = {
 
 class Builder:
     def __init__(self, workspace_id: str, user_id: str = "",
-                 on_progress: Optional[Callable] = None):
+                 on_progress: Optional[Callable] = None,
+                 user_api_keys: Optional[Dict] = None):
         self.workspace_id = workspace_id
         self.user_id = user_id or workspace_id
         self.ws_db = WorkspaceDB(workspace_id)
         self._on_progress = on_progress
+        self._user_api_keys = user_api_keys
 
     async def _emit(self, phase: str, message: str, data: Optional[Dict] = None):
         """Emit a progress event for SSE streaming."""
@@ -269,7 +271,7 @@ class Builder:
                 f"User wants to change:\n{message}\n\n"
                 "Output the FULL updated instruction block."
             )}
-        ], model=REASONING_MODEL, max_tokens=8192)
+        ], model=REASONING_MODEL, max_tokens=8192, user_api_keys=self._user_api_keys)
         new_prompt = resp.get("choices", [{}])[0].get("message", {}).get("content", current)
         save_result = await self.ws_db.save_agent(
             agent_id=agent_id, name=agent["name"], goal=agent["goal"],
@@ -379,6 +381,7 @@ class Builder:
                 test_resp = await call_llm(
                     messages=[{"role": "user", "content": "Reply with OK"}],
                     model=model, max_tokens=5, temperature=0,
+                    user_api_keys=self._user_api_keys,
                 )
                 content = (test_resp.get("choices", [{}])[0]
                            .get("message", {}).get("content", ""))
@@ -493,7 +496,8 @@ class Builder:
         resp = await call_llm(messages=[
             {"role": "system", "content": builder_system},
             {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}"}
-        ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4)
+        ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4,
+            user_api_keys=self._user_api_keys)
         content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not content:
             content = (f"ROLE: Autonomous {agent_type} agent\nGOAL: {goal}\nSTEPS:\n"
@@ -736,6 +740,7 @@ class Builder:
                     ),
                 }],
                 model=FAST_MODEL, max_tokens=100, temperature=0.7,
+                user_api_keys=self._user_api_keys,
             )
             suggestion = (resp.get("choices", [{}])[0]
                           .get("message", {}).get("content", "")).strip()
