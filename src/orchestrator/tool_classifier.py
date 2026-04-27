@@ -11,7 +11,8 @@ Architecture (same as Chat's ToolClassifier):
 Groups:
   build     → build_agent, modify_agent, continue_build, message_build,
               list_engine_tools, execute_tool, predict_tools, update_agent_config,
-              update_agent_prompt, get_agent_prompt, check_integrations
+              update_agent_prompt, get_agent_prompt, check_integrations,
+              google_sheets, google_docs, gmail_send, send_email
   run       → run_agent, stop_run, cancel_session, emergency_stop,
               approve_step, get_pending_approvals
   schedule  → create_schedule, set_trigger, list_schedules, update_schedule,
@@ -46,6 +47,7 @@ TOOL_GROUPS: Dict[str, List[str]] = {
         "check_credits", "workspace_snapshot", "present_options",
         "list_providers", "get_available_tools", "set_agent_mode",
         "repo_to_agent", "analyze_repo",
+        "google_sheets", "google_docs", "gmail_send", "send_email",
     ],
     "run": [
         "run_agent", "stop_run", "cancel_session", "emergency_stop",

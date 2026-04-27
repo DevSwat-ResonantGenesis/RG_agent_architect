@@ -62,6 +62,19 @@ def get_training_data() -> List[TrainingSample]:
         ("set up an agent to post on twitter", _b),
         ("I want to create an agent", _b),
         ("new agent please", _b),
+        ("connect google sheets to my agent", _b),
+        ("add google sheets tool", _b),
+        ("make an agent that reads my spreadsheet", _b),
+        ("build an agent to update my google sheet", _b),
+        ("create an agent that sends emails", _b),
+        ("add email tool to my agent", _b),
+        ("I want my agent to send gmail", _b),
+        ("connect gmail to my agent", _b),
+        ("make an agent that creates google docs", _b),
+        ("add google docs tool", _b),
+        ("build an agent to write documents", _b),
+        ("set up an agent for spreadsheet automation", _b),
+        ("create an agent that reads and writes sheets", _b),
     ]
 
     # ── RUN: execute, stop, cancel, approve, emergency ──
