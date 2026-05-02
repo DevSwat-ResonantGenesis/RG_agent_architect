@@ -10,9 +10,11 @@ from rg_llm import UnifiedLLMClient, LLMRequest
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "groq/llama-3.3-70b-versatile"
-FAST_MODEL = "groq/llama-3.1-8b-instant"
-REASONING_MODEL = "openai/gpt-4o"
+# Model defaults — NO provider prefix so UnifiedLLMClient uses full fallback chain.
+# The client will try tokenrouter → openai → anthropic → groq → google etc.
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
+FAST_MODEL = "llama-3.1-8b-instant"
+REASONING_MODEL = "gpt-4o"
 
 _client = UnifiedLLMClient()
 
@@ -39,11 +41,11 @@ async def call_llm(
     """
     provider, model_name = _parse_provider_model(model)
 
-    print(f"[LLM] Calling model={model} tools={len(tools) if tools else 0} msgs={len(messages)}", flush=True)
+    print(f"[LLM] Calling model={model} provider={provider or 'auto'} tools={len(tools) if tools else 0} msgs={len(messages)}", flush=True)
 
     request = LLMRequest(
         messages=messages,
-        provider=provider,
+        provider=provider,  # None = full fallback chain, set = strict single provider
         model=model_name,
         temperature=temperature,
         max_tokens=max_tokens,

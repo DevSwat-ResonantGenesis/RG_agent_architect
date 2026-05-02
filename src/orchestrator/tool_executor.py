@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from src.core.llm_client import DEFAULT_MODEL
 from src.services.database.workspace_db import WorkspaceDB
 from src.services.memory.memory_store import MemoryStore
 from src.services.billing import billing_client
@@ -59,7 +60,7 @@ class ToolExecutor:
         return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).build(
             name=a.get("name",""), goal=a.get("goal",""), icon=a.get("icon","🤖"),
             tools=a.get("tools", []), max_loops=a.get("max_loops", 30),
-            temperature=a.get("temperature", 0.5), model=a.get("model", "groq/llama-3.3-70b-versatile"))
+            temperature=a.get("temperature", 0.5), model=a.get("model", DEFAULT_MODEL))
     async def _tool_continue_build(self, a):
         from src.builder.builder import Builder
         return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).continue_build(a["agent_id"], a.get("instructions",""))

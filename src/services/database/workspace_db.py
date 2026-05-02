@@ -49,9 +49,9 @@ class WorkspaceDB:
     async def save_agent(self, agent_id: str, name: str, goal: str, icon: str = "🤖",
                          system_prompt: str = "", tools: list = None, needs_build: bool = True,
                          max_loops: int = 30, temperature: float = 0.5,
-                         model: str = "groq/llama-3.3-70b-versatile") -> Dict:
+                         model: str = "llama-3.3-70b-versatile") -> Dict:
         """Create or update an agent via Agent Engine API."""
-        provider = model.split("/")[0] if "/" in model else "groq"
+        provider = model.split("/")[0] if "/" in model else ""
         model_name = model.split("/", 1)[1] if "/" in model else model
         payload = {
             "name": name,

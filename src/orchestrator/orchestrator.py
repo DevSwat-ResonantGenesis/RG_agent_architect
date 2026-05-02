@@ -17,7 +17,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from src.core.config import HISTORY_DEPTH, ORCHESTRATOR_MAX_ITERATIONS, MAX_TOKENS
 from src.core.context import fetch_workspace_context
-from src.core.llm_client import call_llm
+from src.core.llm_client import call_llm, DEFAULT_MODEL
 from src.models.agent import OperationMode
 from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.build_pipeline import BuildPipeline
@@ -320,7 +320,7 @@ class Orchestrator:
         # ── Phase 3: VERIFY ──
         verification = await pipeline.run_phase_3_verify(plan)
         if not verification.get("provider_ok"):
-            plan["model"] = "groq/llama-3.3-70b-versatile"
+            plan["model"] = DEFAULT_MODEL
             text_parts.append("\n⚠️ Provider issue — switched to fallback model.")
         else:
             text_parts.append(f"\n✅ **Verification passed** — {plan.get('model', '')} responding, tools ready")
@@ -520,7 +520,7 @@ class Orchestrator:
                 resp = await call_llm(
                     messages=messages,
                     tools=selected_tools,
-                    model="groq/llama-3.3-70b-versatile",
+                    model=DEFAULT_MODEL,
                     temperature=0.5,
                     max_tokens=MAX_TOKENS,
                     user_api_keys=self._user_api_keys,
@@ -628,7 +628,7 @@ class Orchestrator:
                     try:
                         summary_resp = await call_llm(
                             messages=messages,
-                            model="groq/llama-3.3-70b-versatile",
+                            model=DEFAULT_MODEL,
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
                             user_api_keys=self._user_api_keys,
@@ -658,7 +658,7 @@ class Orchestrator:
                     try:
                         err_resp = await call_llm(
                             messages=messages,
-                            model="groq/llama-3.3-70b-versatile",
+                            model=DEFAULT_MODEL,
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
                             user_api_keys=self._user_api_keys,
