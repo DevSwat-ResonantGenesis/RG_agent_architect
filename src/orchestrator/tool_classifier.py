@@ -47,6 +47,7 @@ TOOL_GROUPS: Dict[str, List[str]] = {
         "check_credits", "workspace_snapshot", "present_options",
         "list_providers", "get_available_tools", "set_agent_mode",
         "repo_to_agent", "analyze_repo",
+        "agent_snapshot", "delete_agent", "delete_all_agents",
         "google_sheets", "google_docs", "gmail_send", "send_email",
     ],
     "run": [
@@ -266,8 +267,11 @@ class ArchitectToolClassifier:
 
         # Always include these universal tools
         tool_names.add("workspace_snapshot")
+        tool_names.add("agent_snapshot")
         tool_names.add("present_options")
         tool_names.add("get_current_time")
+        tool_names.add("store_insight")
+        tool_names.add("retrieve_architect_context")
 
         return list(tool_names), group
 
@@ -316,8 +320,11 @@ def fallback_get_tools(message: str) -> Tuple[List[str], str]:
 
     tool_names = set(TOOL_GROUPS.get(best_group, []))
     tool_names.add("workspace_snapshot")
+    tool_names.add("agent_snapshot")
     tool_names.add("present_options")
     tool_names.add("get_current_time")
+    tool_names.add("store_insight")
+    tool_names.add("retrieve_architect_context")
     return list(tool_names), best_group
 
 
