@@ -486,17 +486,26 @@ class Orchestrator:
         # Always include present_options so the LLM can show interactive buttons
         ALWAYS_INCLUDE = {"present_options", "get_current_time", "workspace_snapshot"}
         if selected_tool_names and predicted_group != "none":
-            name_set = set(selected_tool_names) | ALWAYS_INCLUDE
+            _active_tool_names = set(selected_tool_names) | ALWAYS_INCLUDE
             selected_tools = [t for t in ORCHESTRATOR_TOOLS
-                              if t["function"]["name"] in name_set]
+                              if t["function"]["name"] in _active_tool_names]
             # Safety: if filter produced too few, fall back to all
             if len(selected_tools) < 2:
                 selected_tools = ORCHESTRATOR_TOOLS
+                _active_tool_names = {t["function"]["name"] for t in ORCHESTRATOR_TOOLS}
                 logger.warning("[Orch] Tool filter too aggressive, using all tools")
         elif predicted_group == "none":
             selected_tools = []  # Pure text response, no tools
+            _active_tool_names = set()
         else:
             selected_tools = ORCHESTRATOR_TOOLS  # Fallback: all tools
+            _active_tool_names = {t["function"]["name"] for t in ORCHESTRATOR_TOOLS}
+
+        # Build reverse lookup: tool_name → group (for dynamic expansion)
+        _tool_to_group: Dict[str, str] = {}
+        for _grp, _tnames in TOOL_GROUPS.items():
+            for _tn in _tnames:
+                _tool_to_group[_tn] = _grp
 
         messages = [{"role": "system", "content": system_content}]
         # For REVIEW mode, trim old history aggressively — user is asking a new question
@@ -562,6 +571,19 @@ class Orchestrator:
 
                 print(f"[Orch] TOOL CALL: {name}({args})", flush=True)
                 logger.warning(f"[Orch] tool: {name}({list(args.keys())})")
+
+                # Dynamic tool expansion: if LLM wants a tool outside current set,
+                # merge that tool's group so later iterations can use related tools
+                if name not in _active_tool_names and name in _tool_to_group:
+                    expand_group = _tool_to_group[name]
+                    new_tools = set(TOOL_GROUPS.get(expand_group, []))
+                    added = new_tools - _active_tool_names
+                    if added:
+                        _active_tool_names.update(new_tools)
+                        selected_tools = [t for t in ORCHESTRATOR_TOOLS
+                                          if t["function"]["name"] in _active_tool_names]
+                        print(f"[Orch] EXPANDED tools: +{len(added)} from group '{expand_group}' (now {len(selected_tools)} tools)", flush=True)
+                        logger.info(f"[Orch] Dynamic expansion: +{expand_group} → {len(selected_tools)} tools")
 
                 # Repeated tool detection — break infinite loops
                 if name == _last_tool_name:
