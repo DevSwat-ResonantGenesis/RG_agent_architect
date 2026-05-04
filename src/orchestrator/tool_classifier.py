@@ -11,14 +11,14 @@ Architecture (same as Chat's ToolClassifier):
 Groups:
   build     → build_agent, modify_agent, continue_build, message_build,
               list_engine_tools, execute_tool, predict_tools, update_agent_config,
-              update_agent_prompt, get_agent_prompt, check_integrations,
+              update_agent_prompt, get_agent_prompt, check_integrations, check_llm_status,
               google_sheets, google_docs, gmail_send, send_email
   run       → run_agent, stop_run, cancel_session, emergency_stop,
               approve_step, get_pending_approvals
   schedule  → create_schedule, set_trigger, list_schedules, update_schedule,
               delete_schedule
   inspect   → workspace_snapshot, agent_snapshot, run_snapshot, get_agent_sessions,
-              get_session_steps, get_agent_metrics, list_providers, list_engine_tools
+              get_session_steps, get_agent_metrics, list_providers, check_llm_status, list_engine_tools
   memory    → get_user_memory, update_user_memory, get_agent_memory,
               get_dual_memory, ask_memory, store_insight, retrieve_architect_context
   plan      → create_task, list_tasks, update_task, brainstorm, get_workspace_plan
@@ -45,7 +45,7 @@ TOOL_GROUPS: Dict[str, List[str]] = {
         "list_engine_tools", "execute_tool", "predict_tools", "update_agent_config",
         "update_agent_prompt", "get_agent_prompt", "check_integrations",
         "check_credits", "workspace_snapshot", "present_options",
-        "list_providers", "get_available_tools", "set_agent_mode",
+        "list_providers", "check_llm_status", "get_available_tools", "set_agent_mode",
         "repo_to_agent", "analyze_repo",
         "agent_snapshot", "delete_agent", "delete_all_agents",
         "google_sheets", "google_docs", "gmail_send", "send_email",
@@ -64,7 +64,7 @@ TOOL_GROUPS: Dict[str, List[str]] = {
         "workspace_snapshot", "agent_snapshot", "run_snapshot",
         "get_agent_sessions", "get_session_steps", "get_session_detail",
         "get_session_trace", "get_agent_metrics", "get_platform_metrics",
-        "get_metrics_summary", "get_agent_versions", "list_providers",
+        "get_metrics_summary", "get_agent_versions", "list_providers", "check_llm_status",
         "list_engine_tools", "get_watchdog_status", "get_capabilities",
         "get_limits", "get_available_tools",
     ],

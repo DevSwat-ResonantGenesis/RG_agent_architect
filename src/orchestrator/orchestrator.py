@@ -745,6 +745,8 @@ def _tool_progress_message(name: str, args: Dict) -> str:
         return f"Setting {args.get('interval', 'daily')} schedule..."
     if name == "check_integrations":
         return "Checking connected integrations..."
+    if name == "check_llm_status":
+        return "Testing LLM provider keys..."
     if name == "workspace_snapshot":
         return "Loading workspace..."
     if name == "delegate_to_agent":

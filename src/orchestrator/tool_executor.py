@@ -491,6 +491,65 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e)}
 
+    async def _tool_check_llm_status(self, a):
+        """Check which LLM providers are actually live — test system keys and show user BYOK keys."""
+        import os, httpx
+        results = {"system_providers": [], "user_byok_llm_keys": [], "recommendation": ""}
+
+        # 1. Check system keys
+        checks = [
+            ("tokenrouter", "TOKENROUTER_API_KEY", "https://api.tokenrouter.com/v1/models"),
+            ("openai", "OPENAI_API_KEY", "https://api.openai.com/v1/models"),
+            ("anthropic", "ANTHROPIC_API_KEY", "https://api.anthropic.com/v1/models"),
+            ("groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1/models"),
+            ("google", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1/models"),
+            ("deepseek", "DEEPSEEK_API_KEY", "https://api.deepseek.com/v1/models"),
+            ("mistral", "MISTRAL_API_KEY", "https://api.mistral.ai/v1/models"),
+        ]
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            for name, env_var, url in checks:
+                key = os.getenv(env_var, "")
+                if not key or "placeholder" in key.lower():
+                    results["system_providers"].append({"provider": name, "status": "no_key", "models": []})
+                    continue
+                try:
+                    headers = {"Authorization": f"Bearer {key}"}
+                    if name == "anthropic":
+                        headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+                    elif name == "google":
+                        url = f"{url}?key={key}"
+                        headers = {}
+                    resp = await client.get(url, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        model_list = []
+                        if isinstance(data, dict) and "data" in data:
+                            model_list = [m.get("id", "") for m in data["data"][:8]]
+                        elif isinstance(data, dict) and "models" in data:
+                            model_list = [m.get("name", "").split("/")[-1] for m in data["models"][:8]]
+                        results["system_providers"].append({"provider": name, "status": "live", "models": model_list})
+                    else:
+                        results["system_providers"].append({"provider": name, "status": f"error_{resp.status_code}", "models": []})
+                except Exception as e:
+                    results["system_providers"].append({"provider": name, "status": f"error: {str(e)[:60]}", "models": []})
+
+        # 2. Show user BYOK LLM keys (filter to actual LLM providers)
+        llm_providers = {"openai", "anthropic", "groq", "google", "deepseek", "mistral", "tokenrouter", "azure", "bedrock", "cohere"}
+        if self._user_api_keys:
+            for provider, key in self._user_api_keys.items():
+                if provider.lower() in llm_providers:
+                    results["user_byok_llm_keys"].append(provider)
+
+        # 3. Recommendation
+        live = [p["provider"] for p in results["system_providers"] if p["status"] == "live"]
+        if "tokenrouter" in live:
+            results["recommendation"] = "Use tokenrouter — it provides access to Claude, GPT, Gemini via a single key. Set model to 'anthropic/claude-3-5-sonnet-20241022' or 'openai/gpt-4o'."
+        elif live:
+            results["recommendation"] = f"Use {live[0]} provider."
+        else:
+            results["recommendation"] = "No system LLM keys are live. User needs to add BYOK keys in Settings > Connect Profiles."
+        return results
+
     async def _tool_get_agent_metrics(self, a):
         """Get agent performance metrics."""
         import httpx

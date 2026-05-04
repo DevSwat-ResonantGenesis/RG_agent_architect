@@ -185,6 +185,7 @@ ORCHESTRATOR_TOOLS = [
        {"task_id": {"type": "string"}}, ["task_id"]),
     # ── Provider & Metrics ──
     _t("list_providers", "List all available LLM providers and models. Check which are healthy before selecting a model."),
+    _t("check_llm_status", "Check which LLM providers are actually live and usable — tests system keys and shows user BYOK keys. Use this before recommending a model."),
     _t("get_agent_metrics", "Get performance metrics for an agent: sessions, success rate, avg duration.",
        {"agent_id": {"type": "string"}}, ["agent_id"]),
     _t("get_platform_metrics", "Get overall platform metrics — total agents, sessions, success rates."),
