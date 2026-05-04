@@ -272,6 +272,11 @@ class ArchitectToolClassifier:
         tool_names.add("get_current_time")
         tool_names.add("store_insight")
         tool_names.add("retrieve_architect_context")
+        tool_names.add("delete_agent")
+        tool_names.add("delete_all_agents")
+        tool_names.add("modify_agent")
+        tool_names.add("build_agent")
+        tool_names.add("run_agent")
 
         return list(tool_names), group
 
@@ -325,6 +330,11 @@ def fallback_get_tools(message: str) -> Tuple[List[str], str]:
     tool_names.add("get_current_time")
     tool_names.add("store_insight")
     tool_names.add("retrieve_architect_context")
+    tool_names.add("delete_agent")
+    tool_names.add("delete_all_agents")
+    tool_names.add("modify_agent")
+    tool_names.add("build_agent")
+    tool_names.add("run_agent")
     return list(tool_names), best_group
 
 
