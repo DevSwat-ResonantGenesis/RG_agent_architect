@@ -508,7 +508,7 @@ class Orchestrator:
         actions_taken = []
         _last_tool_name = ""
         _repeat_count = 0
-        _MAX_REPEAT = 2  # Break if same tool called 3+ times in a row
+        _MAX_REPEAT = 5  # Break if same tool called 6+ times in a row
 
         for iteration in range(MAX_TOOL_LOOPS):
             await self._emit_progress("thinking", {
