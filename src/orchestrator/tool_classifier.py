@@ -188,14 +188,14 @@ class ArchitectToolClassifier:
         y = np.array([GROUP_TO_IDX[group] for _, group in samples])
 
         clf = MLPClassifier(
-            hidden_layer_sizes=(128, 64),
+            hidden_layer_sizes=(256, 128, 64),
             activation="relu",
             solver="adam",
-            alpha=0.001,
-            max_iter=400,
+            alpha=0.0005,
+            max_iter=800,
             early_stopping=True,
-            validation_fraction=0.15,
-            n_iter_no_change=20,
+            validation_fraction=0.1,
+            n_iter_no_change=30,
             random_state=42,
             verbose=False,
         )
@@ -265,18 +265,10 @@ class ArchitectToolClassifier:
                 if g != "none" and g in TOOL_GROUPS:
                     tool_names.update(TOOL_GROUPS[g])
 
-        # Always include these universal tools
+        # Always include these universal tools (minimal set — classifier handles the rest)
         tool_names.add("workspace_snapshot")
-        tool_names.add("agent_snapshot")
         tool_names.add("present_options")
         tool_names.add("get_current_time")
-        tool_names.add("store_insight")
-        tool_names.add("retrieve_architect_context")
-        tool_names.add("delete_agent")
-        tool_names.add("delete_all_agents")
-        tool_names.add("modify_agent")
-        tool_names.add("build_agent")
-        tool_names.add("run_agent")
 
         return list(tool_names), group
 
@@ -325,16 +317,8 @@ def fallback_get_tools(message: str) -> Tuple[List[str], str]:
 
     tool_names = set(TOOL_GROUPS.get(best_group, []))
     tool_names.add("workspace_snapshot")
-    tool_names.add("agent_snapshot")
     tool_names.add("present_options")
     tool_names.add("get_current_time")
-    tool_names.add("store_insight")
-    tool_names.add("retrieve_architect_context")
-    tool_names.add("delete_agent")
-    tool_names.add("delete_all_agents")
-    tool_names.add("modify_agent")
-    tool_names.add("build_agent")
-    tool_names.add("run_agent")
     return list(tool_names), best_group
 
 
