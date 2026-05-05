@@ -10,11 +10,11 @@ from rg_llm import UnifiedLLMClient, LLMRequest
 
 logger = logging.getLogger(__name__)
 
-# Model defaults — NO provider prefix so UnifiedLLMClient uses full fallback chain.
-# The client will try tokenrouter → openai → anthropic → groq → google etc.
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
-FAST_MODEL = "llama-3.1-8b-instant"
-REASONING_MODEL = "gpt-4o"
+# Model defaults — use known-working TokenRouter models with provider prefix.
+# These models are verified working in the TokenRouter catalog.
+DEFAULT_MODEL = "tokenrouter/google/gemini-3-flash-preview"
+FAST_MODEL = "tokenrouter/qwen/qwen3.5-flash"
+REASONING_MODEL = "tokenrouter/anthropic/claude-opus-4.7"
 
 _client = UnifiedLLMClient()
 
