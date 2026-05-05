@@ -583,7 +583,7 @@ class ToolExecutor:
         live = [p["provider"] for p in results["system_providers"] if p["status"] == "live"]
         routable = [p["provider"] for p in results["system_providers"] if p.get("runner_routable")]
         if "tokenrouter" in live:
-            results["recommendation"] = "Use tokenrouter — it provides access to Claude, GPT, Gemini via a single key. Set model to 'google/gemini-3-flash-preview' or 'anthropic/claude-opus-4.7'."
+            results["recommendation"] = "Use tokenrouter — it provides access to 72+ models via a single key. For most tool-based agents, use cheaper models like 'google/gemini-3-flash-preview' or 'qwen/qwen3.5-flash'. Use 'anthropic/claude-opus-4.7' or 'openai/gpt-5.5' only for complex reasoning tasks."
         elif live:
             results["recommendation"] = f"Use {live[0]} provider."
         else:
