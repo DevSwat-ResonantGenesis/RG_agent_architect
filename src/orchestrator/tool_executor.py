@@ -492,11 +492,17 @@ class ToolExecutor:
             return {"error": str(e)}
 
     async def _tool_check_llm_status(self, a):
-        """Check which LLM providers are actually live — test system keys and show user BYOK keys."""
+        """Check which LLM providers are actually live — test system keys, runner routability, and show user BYOK keys."""
         import os, httpx
         results = {"system_providers": [], "user_byok_llm_keys": [], "recommendation": ""}
 
-        # 1. Check system keys
+        # Load BUILTIN_PROVIDERS to check runner routability
+        try:
+            from rg_llm import BUILTIN_PROVIDERS
+        except Exception:
+            BUILTIN_PROVIDERS = {}
+
+        # 1. Check system keys + runner routability
         checks = [
             ("tokenrouter", "TOKENROUTER_API_KEY", "https://api.tokenrouter.com/v1/models"),
             ("openai", "OPENAI_API_KEY", "https://api.openai.com/v1/models"),
@@ -509,8 +515,19 @@ class ToolExecutor:
         async with httpx.AsyncClient(timeout=8.0) as client:
             for name, env_var, url in checks:
                 key = os.getenv(env_var, "")
-                if not key or "placeholder" in key.lower():
-                    results["system_providers"].append({"provider": name, "status": "no_key", "models": []})
+                key_present = bool(key and "placeholder" not in key.lower())
+                
+                # Check if runner knows this provider (BUILTIN_PROVIDERS or BYOK-compatible)
+                runner_routable = name in BUILTIN_PROVIDERS or name.lower() in [p.lower() for p in BUILTIN_PROVIDERS]
+                
+                if not key_present:
+                    results["system_providers"].append({
+                        "provider": name, 
+                        "status": "no_key", 
+                        "key_present": False,
+                        "runner_routable": runner_routable,
+                        "models": []
+                    })
                     continue
                 try:
                     headers = {"Authorization": f"Bearer {key}"}
@@ -527,23 +544,46 @@ class ToolExecutor:
                             model_list = [m.get("id", "") for m in data["data"][:8]]
                         elif isinstance(data, dict) and "models" in data:
                             model_list = [m.get("name", "").split("/")[-1] for m in data["models"][:8]]
-                        results["system_providers"].append({"provider": name, "status": "live", "models": model_list})
+                        results["system_providers"].append({
+                            "provider": name, 
+                            "status": "live",
+                            "key_present": True,
+                            "runner_routable": runner_routable,
+                            "models": model_list
+                        })
                     else:
-                        results["system_providers"].append({"provider": name, "status": f"error_{resp.status_code}", "models": []})
+                        results["system_providers"].append({
+                            "provider": name, 
+                            "status": f"error_{resp.status_code}",
+                            "key_present": True,
+                            "runner_routable": runner_routable,
+                            "models": []
+                        })
                 except Exception as e:
-                    results["system_providers"].append({"provider": name, "status": f"error: {str(e)[:60]}", "models": []})
+                    results["system_providers"].append({
+                        "provider": name, 
+                        "status": f"error: {str(e)[:60]}",
+                        "key_present": True,
+                        "runner_routable": runner_routable,
+                        "models": []
+                    })
 
         # 2. Show user BYOK LLM keys (filter to actual LLM providers)
         llm_providers = {"openai", "anthropic", "groq", "google", "deepseek", "mistral", "tokenrouter", "azure", "bedrock", "cohere"}
         if self._user_api_keys:
             for provider, key in self._user_api_keys.items():
                 if provider.lower() in llm_providers:
-                    results["user_byok_llm_keys"].append(provider)
+                    runner_routable = provider.lower() in [p.lower() for p in BUILTIN_PROVIDERS]
+                    results["user_byok_llm_keys"].append({
+                        "provider": provider,
+                        "runner_routable": runner_routable,
+                    })
 
         # 3. Recommendation
         live = [p["provider"] for p in results["system_providers"] if p["status"] == "live"]
+        routable = [p["provider"] for p in results["system_providers"] if p.get("runner_routable")]
         if "tokenrouter" in live:
-            results["recommendation"] = "Use tokenrouter — it provides access to Claude, GPT, Gemini via a single key. Set model to 'anthropic/claude-3-5-sonnet-20241022' or 'openai/gpt-4o'."
+            results["recommendation"] = "Use tokenrouter — it provides access to Claude, GPT, Gemini via a single key. Set model to 'google/gemini-3-flash-preview' or 'anthropic/claude-opus-4.7'."
         elif live:
             results["recommendation"] = f"Use {live[0]} provider."
         else:
