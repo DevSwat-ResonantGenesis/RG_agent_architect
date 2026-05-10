@@ -17,7 +17,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from src.core.config import HISTORY_DEPTH, ORCHESTRATOR_MAX_ITERATIONS, MAX_TOKENS
 from src.core.context import fetch_workspace_context
-from src.core.llm_client import call_llm, DEFAULT_MODEL
+from src.core.llm_client import call_llm, call_llm_stream, DEFAULT_MODEL
 from src.models.agent import OperationMode
 from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.build_pipeline import BuildPipeline
@@ -525,14 +525,23 @@ class Orchestrator:
                 "message": "Analyzing your request..." if iteration == 0 else "Processing next step..."
             })
 
+            # Use streaming LLM call to emit tokens in real-time
+            _streaming_content = ""
+
+            async def _on_token(token: str):
+                nonlocal _streaming_content
+                _streaming_content += token
+                await self._emit_progress("text", {"content": _streaming_content})
+
             try:
-                resp = await call_llm(
+                resp = await call_llm_stream(
                     messages=messages,
                     tools=selected_tools,
                     model=DEFAULT_MODEL,
                     temperature=0.5,
                     max_tokens=MAX_TOKENS,
                     user_api_keys=self._user_api_keys,
+                    on_chunk=_on_token,
                 )
             except Exception as e:
                 logger.error(f"LLM call failed iteration {iteration}: {e}")
@@ -549,8 +558,8 @@ class Orchestrator:
                 if not is_safe:
                     logger.error(f"[Orch] Safety blocked LLM response: {safety_error}")
                     content = f"[Safety blocked: {safety_error}]"
+                    await self._emit_progress("text", {"content": content})
                 final_text += content
-                await self._emit_progress("text", {"content": content})
 
             if not raw_tool_calls:
                 print(f"[Orch] NO TOOL CALLS - LLM text response: {content[:200]}", flush=True)
@@ -648,12 +657,20 @@ class Orchestrator:
                     })
                     await self._emit_progress("summarizing", {"message": "Generating summary..."})
                     try:
-                        summary_resp = await call_llm(
+                        _summary_streaming = ""
+
+                        async def _on_summary_token(token: str):
+                            nonlocal _summary_streaming
+                            _summary_streaming += token
+                            await self._emit_progress("text", {"content": _summary_streaming})
+
+                        summary_resp = await call_llm_stream(
                             messages=messages,
                             model=DEFAULT_MODEL,
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
                             user_api_keys=self._user_api_keys,
+                            on_chunk=_on_summary_token,
                         )
                         summary_text = summary_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
                         if summary_text:
@@ -678,12 +695,20 @@ class Orchestrator:
                     })
                     # Let LLM generate error response
                     try:
-                        err_resp = await call_llm(
+                        _err_streaming = ""
+
+                        async def _on_err_token(token: str):
+                            nonlocal _err_streaming
+                            _err_streaming += token
+                            await self._emit_progress("text", {"content": _err_streaming})
+
+                        err_resp = await call_llm_stream(
                             messages=messages,
                             model=DEFAULT_MODEL,
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
                             user_api_keys=self._user_api_keys,
+                            on_chunk=_on_err_token,
                         )
                         err_text = err_resp.get("choices", [{}])[0].get("message", {}).get("content", "")
                         if err_text:

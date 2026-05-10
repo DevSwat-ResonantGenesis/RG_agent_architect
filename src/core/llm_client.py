@@ -3,10 +3,12 @@
 Uses the shared rg_llm library directly (mounted at /app/rg_llm).
 Handles multi-provider fallback, BYOK keys, streaming, and tool calling.
 """
+import asyncio
+import inspect
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
-from rg_llm import UnifiedLLMClient, LLMRequest
+from rg_llm import UnifiedLLMClient, LLMRequest, LLMStreamEvent, StreamEventType
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ async def call_llm(
 
     request = LLMRequest(
         messages=messages,
-        provider=provider,  # None = full fallback chain, set = strict single provider
+        provider=provider,
         model=model_name,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -84,4 +86,89 @@ async def call_llm(
     tc_count = len(response.tool_calls) if response.tool_calls else 0
     content_len = len(response.content or "")
     print(f"[LLM] Response via {response.provider}/{response.model}: tool_calls={tc_count}, content_len={content_len}", flush=True)
+    return result
+
+
+async def call_llm_stream(
+    messages: List[Dict],
+    tools: Optional[List[Dict]] = None,
+    model: str = DEFAULT_MODEL,
+    temperature: float = 0.6,
+    max_tokens: int = 16000,
+    user_api_keys: Optional[Dict[str, str]] = None,
+    on_chunk: Optional[Callable[[str], Any]] = None,
+) -> Dict[str, Any]:
+    """Streaming LLM call — emits tokens via on_chunk callback as they arrive.
+
+    Returns the same OpenAI-compatible dict as call_llm() for backward compat,
+    but calls on_chunk(token) for each token so the orchestrator can stream live.
+    """
+    provider, model_name = _parse_provider_model(model)
+
+    print(f"[LLM-stream] Calling model={model} provider={provider or 'auto'} tools={len(tools) if tools else 0} msgs={len(messages)}", flush=True)
+
+    request = LLMRequest(
+        messages=messages,
+        provider=provider,
+        model=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        tools=tools,
+    )
+
+    accumulated_content = ""
+    accumulated_tool_calls: List[Any] = []
+    actual_provider = ""
+    actual_model = model_name
+    usage: Dict[str, int] = {}
+
+    try:
+        async for event in _client.stream(request, user_keys=user_api_keys):
+            if event.event == StreamEventType.CHUNK:
+                accumulated_content += event.content
+                if on_chunk and event.content:
+                    if inspect.iscoroutinefunction(on_chunk):
+                        await on_chunk(event.content)
+                    else:
+                        on_chunk(event.content)
+            elif event.event == StreamEventType.TOOL_CALLS:
+                accumulated_tool_calls = event.tool_calls
+            elif event.event == StreamEventType.PROVIDER:
+                actual_provider = event.provider
+                actual_model = event.model or model_name
+            elif event.event == StreamEventType.DONE:
+                actual_provider = event.provider or actual_provider
+                actual_model = event.model or actual_model
+                usage = event.usage or {}
+            elif event.event == StreamEventType.ERROR:
+                raise Exception(event.error or "Streaming failed")
+    except Exception as e:
+        logger.error(f"[LLM-stream] failed: {e}")
+        raise
+
+    # Build OpenAI-compatible response dict
+    message: Dict[str, Any] = {"role": "assistant", "content": accumulated_content}
+    if accumulated_tool_calls:
+        message["tool_calls"] = [
+            {
+                "id": tc.id or f"call_{i}",
+                "type": "function",
+                "function": {"name": tc.name, "arguments": tc.arguments},
+            }
+            for i, tc in enumerate(accumulated_tool_calls)
+        ]
+
+    result = {
+        "choices": [{"message": message, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0),
+        },
+        "provider": actual_provider,
+        "model": actual_model,
+    }
+
+    tc_count = len(accumulated_tool_calls)
+    print(f"[LLM-stream] Response via {actual_provider}/{actual_model}: tool_calls={tc_count}, content_len={len(accumulated_content)}", flush=True)
     return result
