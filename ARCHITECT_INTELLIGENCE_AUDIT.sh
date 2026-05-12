@@ -286,12 +286,20 @@
 #   ✅ Auto-store learnings after every build (store_architect_insight)
 #   □ Add tool verification phase before test run (TODO)
 #
+# PHASE 2b (Critical bugs) — DEPLOYED May 11, 2026 (second batch):
+#   ✅ Inject current date into agent system prompts (agents were searching 2024)
+#   ✅ Fix OAuth naming mismatch (google_calendar vs google-calendar vs google)
+#   ✅ Fix double test run (Builder internal + Pipeline both testing)
+#   ✅ Force memory_write/memory_read on ALL agents (persistent memory)
+#   ✅ Live token streaming for build pipeline (call_llm → call_llm_stream)
+#   ✅ Forward stream_token SSE events in RG_Chat
+#
 # PHASE 3 (Self-improvement — next session):
 #   □ Add quality evaluation LLM call after test
 #   □ Track success/failure patterns across sessions (memory partially done)
+#   □ Add connect button for missing OAuth (frontend UI for inline connection)
 #
 # PHASE 4 (Polish — next session):
-#   □ Stream build progress more granularly (each sub-step)
 #   □ Show test run output inline (not just "passed/failed")
 #   □ Add time estimation to user ("Building... ~25s remaining")
 #   □ Cache common agent recipes for instant builds
