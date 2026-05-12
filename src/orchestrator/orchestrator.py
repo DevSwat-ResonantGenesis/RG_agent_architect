@@ -494,6 +494,9 @@ class Orchestrator:
             if status == "success":
                 text = (f"✅ Agent ran successfully — {result.get('steps', 0)} steps "
                         f"in {result.get('duration_s', 0):.1f}s")
+                final_output = result.get("final_output", "")
+                if final_output:
+                    text += f"\n\n📄 **Agent Output:**\n{final_output[:2000]}"
             elif status == "failed":
                 text = f"❌ Run failed: {result.get('error', 'unknown')}"
             else:
