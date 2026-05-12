@@ -23,11 +23,12 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from src.core.config import AGENT_ENGINE_URL
-from src.core.llm_client import call_llm, DEFAULT_MODEL, FAST_MODEL, REASONING_MODEL
+from src.core.llm_client import call_llm, call_llm_stream, DEFAULT_MODEL, FAST_MODEL, REASONING_MODEL
 from src.services.billing import billing_client
 from src.services.memory.memory_store import MemoryStore
 from src.builder.agent_type_classifier import get_agent_type_classifier, fallback_classify
 from src.builder.specialised_prompt_writer import get_specialised_builder_prompt
+from src.knowledge.agent_recipes import get_recipe_context
 
 logger = logging.getLogger(__name__)
 
@@ -149,15 +150,20 @@ class BuildPipeline:
         existing = self.research.get("existing_agents", [])
         existing_names = [a.get("name", "") for a in existing]
 
-        plan_prompt = f"""You are planning an agent build. Analyze the user's request and create a structured build plan.
+        recipe_context = get_recipe_context(self.user_message)
+
+        plan_prompt = f"""You are an elite agent engineer planning an agent build. Use your expert knowledge to create the OPTIMAL configuration.
 
 User request: "{self.user_message}"
+
+{recipe_context}
 
 Context:
 - Connected integrations: {', '.join(connected_list) if connected_list else 'none'}
 - Existing agents: {', '.join(existing_names) if existing_names else 'none'}
 - Memory context: {self.research.get('memory_context', 'none')[:300]}
 
+Use the expert recommendation above as your baseline. Adjust tools/model/temperature ONLY if the specific request warrants deviation.
 Respond with ONLY a JSON object (no markdown, no explanation):
 {{
   "name": "Agent Name",
@@ -176,10 +182,17 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 }}"""
 
         try:
-            resp = await call_llm(
+            _plan_tokens = ""
+            async def _on_plan_token(token: str):
+                nonlocal _plan_tokens
+                _plan_tokens += token
+                await self._emit("stream_token", {"phase": "plan", "content": _plan_tokens})
+
+            resp = await call_llm_stream(
                 messages=[{"role": "user", "content": plan_prompt}],
                 model=FAST_MODEL, max_tokens=2000, temperature=0.3,
                 user_api_keys=self._user_api_keys,
+                on_chunk=_on_plan_token,
             )
             content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
 
@@ -331,11 +344,19 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         builder_system = get_specialised_builder_prompt(agent_type)
         tool_list = ", ".join(tools) if tools else "web_search, fetch_url"
 
-        resp = await call_llm(messages=[
+        _prompt_tokens = ""
+        async def _on_prompt_token(token: str):
+            nonlocal _prompt_tokens
+            _prompt_tokens += token
+            if len(_prompt_tokens) % 50 < len(token):
+                await self._emit("stream_token", {"phase": "prompt", "content": _prompt_tokens})
+
+        resp = await call_llm_stream(messages=[
             {"role": "system", "content": builder_system},
             {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}"}
         ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4,
-            user_api_keys=self._user_api_keys)
+            user_api_keys=self._user_api_keys,
+            on_chunk=_on_prompt_token)
         prompt = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
 
         if not prompt:
@@ -496,6 +517,99 @@ Respond with ONLY a JSON object (no markdown, no explanation):
                 "status": "error", "message": f"Test error: {str(e)[:200]}",
             })
             return {"status": "error", "note": str(e)[:200]}
+
+    async def run_self_heal(self, agent_id: str, plan: Dict, error: str) -> Optional[str]:
+        """Diagnose a test failure and attempt to fix the agent automatically."""
+        await self._emit("phase", {"phase": "self_heal", "message": f"Diagnosing failure: {error[:100]}..."})
+
+        diagnosis_prompt = f"""An agent test run FAILED. Diagnose the root cause and suggest a fix.
+
+Agent: {plan.get('name', 'unknown')}
+Goal: {plan.get('goal', 'unknown')}
+Tools: {plan.get('tools', [])}
+Model: {plan.get('model', 'unknown')}
+Error: {error}
+
+Respond with ONLY a JSON object:
+{{
+  "cause": "brief root cause",
+  "fix_type": "one of: swap_tool, add_tool, update_prompt, adjust_config, unfixable",
+  "fix_detail": "specific fix to apply",
+  "swap_from": "tool to remove (if swap_tool)",
+  "swap_to": "tool to add (if swap_tool or add_tool)",
+  "new_max_loops": null or integer (if adjust_config)
+}}"""
+
+        try:
+            resp = await call_llm(
+                messages=[{"role": "user", "content": diagnosis_prompt}],
+                model=FAST_MODEL, max_tokens=500, temperature=0.2,
+                user_api_keys=self._user_api_keys,
+            )
+            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+            import json
+            clean = content.strip()
+            if clean.startswith("```"):
+                clean = clean.split("\n", 1)[-1]
+                if clean.endswith("```"):
+                    clean = clean[:-3]
+                clean = clean.strip()
+            diagnosis = json.loads(clean)
+        except Exception as e:
+            logger.warning(f"[Pipeline] Self-heal diagnosis failed: {e}")
+            return None
+
+        fix_type = diagnosis.get("fix_type", "unfixable")
+        if fix_type == "unfixable":
+            return None
+
+        # Apply the fix via Agent Engine
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                if fix_type in ("swap_tool", "add_tool"):
+                    current_tools = list(plan.get("tools", []))
+                    if fix_type == "swap_tool" and diagnosis.get("swap_from"):
+                        if diagnosis["swap_from"] in current_tools:
+                            current_tools.remove(diagnosis["swap_from"])
+                    if diagnosis.get("swap_to"):
+                        current_tools.append(diagnosis["swap_to"])
+                    plan["tools"] = current_tools
+                    resp = await client.patch(
+                        f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                        headers=self.ws_db._headers,
+                        json={"tools": current_tools},
+                    )
+                    return f"Updated tools: {current_tools}"
+
+                elif fix_type == "adjust_config":
+                    updates = {}
+                    if diagnosis.get("new_max_loops"):
+                        updates["max_loops"] = diagnosis["new_max_loops"]
+                        plan["max_loops"] = diagnosis["new_max_loops"]
+                    if updates:
+                        resp = await client.patch(
+                            f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                            headers=self.ws_db._headers,
+                            json=updates,
+                        )
+                        return f"Updated config: {updates}"
+
+                elif fix_type == "update_prompt":
+                    # Append fix guidance to existing prompt
+                    fix_detail = diagnosis.get("fix_detail", "")
+                    if fix_detail:
+                        resp = await client.patch(
+                            f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                            headers=self.ws_db._headers,
+                            json={"system_prompt_append": f"\n\nIMPORTANT FIX: {fix_detail}"},
+                        )
+                        return f"Updated prompt: {fix_detail[:100]}"
+
+        except Exception as e:
+            logger.warning(f"[Pipeline] Self-heal fix failed: {e}")
+            return None
+
+        return diagnosis.get("fix_detail", "Applied fix")
 
     async def generate_offers(self, agent_id: str, name: str, goal: str, tools: List[str]) -> List[Dict]:
         """Phase 7: OFFER — generate post-build suggestions."""

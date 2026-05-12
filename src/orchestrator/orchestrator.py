@@ -78,6 +78,25 @@ class Orchestrator:
 
     async def initialize_session(self):
         self.context = await fetch_workspace_context(self.workspace_id, user_id=self.user_id)
+        # Recall architect learnings from memory (insights, patterns, user preferences)
+        if not hasattr(self, '_memory_context_loaded') or not self._memory_context_loaded:
+            try:
+                from src.services.memory.memory_store import MemoryStore
+                mem = MemoryStore(self.workspace_id, "architect")
+                context = await mem.ask_memory("Recall past build insights, user preferences, and patterns")
+                answer = ""
+                if context and not context.get("error"):
+                    answer = context.get("answer", "") or context.get("response", "")
+                if answer:
+                    self._architect_memory = str(answer)[:1000]
+                    logger.info(f"[Orch] Loaded architect memory: {len(self._architect_memory)} chars")
+                else:
+                    self._architect_memory = ""
+                self._memory_context_loaded = True
+            except Exception as e:
+                logger.warning(f"[Orch] Architect memory recall failed: {e}")
+                self._architect_memory = ""
+                self._memory_context_loaded = True
         # Fetch BYOK keys so LLM calls use user's own API keys when available
         if self._user_api_keys is None:
             try:
@@ -347,17 +366,35 @@ class Orchestrator:
                 text_parts.append(f"✅ Blockchain identity: `{build_result['identity_hash'][:16]}...`")
             await self._emit_progress("text", {"content": "\n".join(text_parts)})
 
-            # ── Phase 6: TEST ──
-            test_result = await pipeline.run_phase_6_test(agent_id, plan.get("goal", ""))
-            if test_result.get("status") == "success":
-                text_parts.append(
-                    f"\n🧪 **Test passed** — {test_result.get('steps', 0)} steps "
-                    f"in {test_result.get('duration_s', 0):.1f}s"
-                )
-            elif test_result.get("status") == "failed":
-                text_parts.append(f"\n⚠️ Test run failed: {test_result.get('error', 'unknown')}")
-            else:
-                text_parts.append(f"\nℹ️ Test: {test_result.get('status', 'skipped')}")
+            # ── Phase 6: TEST + SELF-HEALING LOOP (up to 3 attempts) ──
+            test_result = None
+            for _attempt in range(3):
+                test_result = await pipeline.run_phase_6_test(agent_id, plan.get("goal", ""))
+                if test_result.get("status") == "success":
+                    text_parts.append(
+                        f"\n🧪 **Test passed** — {test_result.get('steps', 0)} steps "
+                        f"in {test_result.get('duration_s', 0):.1f}s"
+                    )
+                    break
+                elif test_result.get("status") == "failed" and _attempt < 2:
+                    error_msg = test_result.get("error", "unknown")
+                    text_parts.append(f"\n⚠️ Test attempt {_attempt+1} failed: {error_msg}")
+                    text_parts.append(f"🔧 **Self-healing** — diagnosing and fixing...")
+                    await self._emit_progress("text", {"content": "\n".join(text_parts)})
+
+                    # Diagnose and fix via LLM
+                    fix_applied = await pipeline.run_self_heal(agent_id, plan, error_msg)
+                    if fix_applied:
+                        text_parts.append(f"✅ Fix applied: {fix_applied}")
+                        await self._emit_progress("text", {"content": "\n".join(text_parts)})
+                    else:
+                        text_parts.append("⚠️ Could not auto-fix — proceeding with current config")
+                        break
+                elif test_result.get("status") == "failed":
+                    text_parts.append(f"\n⚠️ Test failed after 3 attempts: {test_result.get('error', 'unknown')}")
+                else:
+                    text_parts.append(f"\nℹ️ Test: {test_result.get('status', 'skipped')}")
+                    break
 
             # ── Phase 7: OFFERS ──
             offers = await pipeline.generate_offers(
@@ -368,6 +405,21 @@ class Orchestrator:
                 text_parts.append("\n---\n**What's next?**")
                 for o in offers:
                     text_parts.append(f"  - **{o['title']}**: {o['description']}")
+
+            # ── Auto-store learnings ──
+            try:
+                from src.services.memory.memory_store import MemoryStore
+                mem = MemoryStore(self.workspace_id, "architect")
+                test_status = test_result.get("status", "unknown") if test_result else "unknown"
+                insight = (
+                    f"Built agent '{plan.get('name')}' ({plan.get('goal', '')[:100]}). "
+                    f"Tools: {plan.get('tools', [])}. Model: {plan.get('model')}. "
+                    f"Test: {test_status}."
+                )
+                await mem.store_architect_insight(insight, "success_pattern" if test_status == "success" else "failure_pattern")
+                logger.info(f"[Orch] Stored build insight: {insight[:100]}")
+            except Exception as e:
+                logger.warning(f"[Orch] Failed to store build insight: {e}")
 
             plan["_built_agent_id"] = agent_id
             self._pipeline_phase = "waiting_post_build"
@@ -463,6 +515,10 @@ class Orchestrator:
             agent_names=agent_names,
             is_run_event=False,
         )
+
+        # Inject architect memory into system prompt if available
+        if hasattr(self, '_architect_memory') and self._architect_memory:
+            system_content += f"\n\n<architect_memory>\nPast learnings and insights:\n{self._architect_memory}\n</architect_memory>"
 
         # ── Neural tool selection: only inject relevant tools per message ──
         selected_tool_names = None

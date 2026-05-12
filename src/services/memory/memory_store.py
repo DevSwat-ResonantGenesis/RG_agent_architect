@@ -29,7 +29,7 @@ class MemoryStore:
 
     async def update_user_memory(self, content: str) -> Dict:
         """Store fact in user hash sphere."""
-        return await self._post("/rag/memories", {
+        return await self._post("/memory/rag/memories", {
             "content": content,
             "user_id": self.workspace_id,
             "scope": "user",
@@ -55,7 +55,7 @@ class MemoryStore:
         """Store learning from a run in agent hash sphere."""
         if not self.agent_id:
             return {"error": "No agent_id"}
-        return await self._post("/rag/memories", {
+        return await self._post("/memory/rag/memories", {
             "content": content,
             "user_id": self.workspace_id,
             "agent_id": self.agent_id,
@@ -79,11 +79,11 @@ class MemoryStore:
         body = {"query": question, "user_id": self.workspace_id}
         if self.agent_id:
             body["agent_id"] = self.agent_id
-        return await self._post("/rag/ask", body)
+        return await self._post("/memory/rag/ask", body)
 
     async def store_run_summary(self, summary: str, run_id: str, agent_id: str = "") -> Dict:
         """Store run summary as a learning for future runs."""
-        return await self._post("/rag/memories", {
+        return await self._post("/memory/rag/memories", {
             "content": f"Run result: {summary}",
             "user_id": self.workspace_id,
             "agent_id": agent_id or self.agent_id,
@@ -135,7 +135,7 @@ class MemoryStore:
         }
         if self.agent_id:
             body["agent_id"] = self.agent_id
-        return await self._post("/rag/memories", body)
+        return await self._post("/memory/rag/memories", body)
 
     async def search_tasks(self, query: str = "all tasks and plans",
                            agent_id: str = "", limit: int = 30) -> Dict:
@@ -168,7 +168,7 @@ class MemoryStore:
         }
         if agent_id:
             body["agent_id"] = agent_id
-        return await self._post("/rag/memories", body)
+        return await self._post("/memory/rag/memories", body)
 
     async def search_brainstorms(self, query: str = "brainstorm ideas",
                                   agent_id: str = "", limit: int = 20) -> Dict:
@@ -194,7 +194,7 @@ class MemoryStore:
         Categories: observation, user_preference, agent_pattern, failure_pattern, success_pattern
         This makes the architect smarter over time — it remembers what works.
         """
-        return await self._post("/rag/memories", {
+        return await self._post("/memory/rag/memories", {
             "content": f"[architect:{category}] {insight}",
             "user_id": self.workspace_id,
             "scope": "user",
