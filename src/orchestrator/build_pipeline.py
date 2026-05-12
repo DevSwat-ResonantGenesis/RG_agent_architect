@@ -344,6 +344,9 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         builder_system = get_specialised_builder_prompt(agent_type)
         tool_list = ", ".join(tools) if tools else "web_search, fetch_url"
 
+        now = datetime.now(timezone.utc)
+        date_context = f"Current date: {now.strftime('%Y-%m-%d')} (year {now.year}). Agent must always search for current/recent data."
+
         _prompt_tokens = ""
         async def _on_prompt_token(token: str):
             nonlocal _prompt_tokens
@@ -353,7 +356,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 
         resp = await call_llm_stream(messages=[
             {"role": "system", "content": builder_system},
-            {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}"}
+            {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}\n\n{date_context}"}
         ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4,
             user_api_keys=self._user_api_keys,
             on_chunk=_on_prompt_token)
@@ -412,6 +415,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
                 max_loops=final_plan.get("max_loops", 30),
                 temperature=final_plan.get("temperature", 0.5),
                 model=final_plan.get("model", DEFAULT_MODEL),
+                skip_test=True,
             )
 
         success = result.get("outcome") == "SUCCESS"

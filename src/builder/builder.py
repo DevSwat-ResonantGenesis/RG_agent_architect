@@ -63,7 +63,8 @@ class Builder:
     async def build(self, name: str, goal: str, icon: str = "🤖",
                     tools: list = None, max_loops: int = 30,
                     temperature: float = 0.5,
-                    model: str = "groq/llama-3.3-70b-versatile") -> Dict[str, Any]:
+                    model: str = "groq/llama-3.3-70b-versatile",
+                    skip_test: bool = False) -> Dict[str, Any]:
         run_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
 
@@ -94,6 +95,10 @@ class Builder:
                 resolved_tools = ["web_search", "fetch_url"]
             await self._emit("tool_selection",
                              f"Neural classifier selected {len(resolved_tools)} tools: {resolved_tools}")
+        # ALWAYS ensure memory tools are included — agents need persistent memory
+        for mem_tool in ("memory_write", "memory_read"):
+            if mem_tool not in resolved_tools:
+                resolved_tools.append(mem_tool)
 
         # ── PHASE 0: Duplicate detection ──
         existing = await self._find_agent_by_name(name)
@@ -186,22 +191,24 @@ class Builder:
                          {"test_results": test_results, "all_passed": tools_ok})
 
         # ── PHASE 7: Post-build test run + auto-retry ──
-        await self._emit("test_run", f"Running test execution of '{name}'...")
-        test_run = await self._post_build_test_run(agent_id, name, goal)
-        if test_run.get("status") == "success":
-            await self._emit("test_run",
-                             f"Test run passed ({test_run.get('steps', 0)} steps, "
-                             f"{test_run.get('duration_s', 0):.1f}s)",
-                             test_run)
-        elif test_run.get("status") == "retried":
-            await self._emit("test_run",
-                             f"Test run failed initially, auto-retried and "
-                             f"{'passed' if test_run.get('retry_ok') else 'still failing'}",
-                             test_run)
-        else:
-            await self._emit("test_run_warning",
-                             f"Test run issue: {test_run.get('note', 'unknown')}",
-                             test_run)
+        test_run = {"status": "skipped"}
+        if not skip_test:
+            await self._emit("test_run", f"Running test execution of '{name}'...")
+            test_run = await self._post_build_test_run(agent_id, name, goal)
+            if test_run.get("status") == "success":
+                await self._emit("test_run",
+                                 f"Test run passed ({test_run.get('steps', 0)} steps, "
+                                 f"{test_run.get('duration_s', 0):.1f}s)",
+                                 test_run)
+            elif test_run.get("status") == "retried":
+                await self._emit("test_run",
+                                 f"Test run failed initially, auto-retried and "
+                                 f"{'passed' if test_run.get('retry_ok') else 'still failing'}",
+                                 test_run)
+            else:
+                await self._emit("test_run_warning",
+                                 f"Test run issue: {test_run.get('note', 'unknown')}",
+                                 test_run)
 
         # ── PHASE 8: Store memory ──
         mem = MemoryStore(self.workspace_id, agent_id)
@@ -472,6 +479,8 @@ class Builder:
         3. LLM generates far better instructions using domain expertise
         """
         tool_list = ", ".join(tools) if tools else "web_search, fetch_url"
+        now = datetime.now(timezone.utc)
+        date_context = f"Current date: {now.strftime('%Y-%m-%d')} (year {now.year}). Always search for current/recent data, never older than necessary."
 
         # ── Neural agent type classification ──
         classifier = get_agent_type_classifier()
@@ -496,7 +505,7 @@ class Builder:
 
         resp = await call_llm(messages=[
             {"role": "system", "content": builder_system},
-            {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}"}
+            {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}\n\n{date_context}"}
         ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4,
             user_api_keys=self._user_api_keys)
         content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -506,6 +515,9 @@ class Builder:
                        f"2. Process and analyze results\n"
                        f"3. Store output in agent database\n"
                        f"OUTPUT FORMAT: Structured summary with source URLs")
+
+        # Prepend date/time context to generated instructions
+        content = f"CURRENT DATE: {now.strftime('%Y-%m-%d')} | Year: {now.year}\nALWAYS use current year ({now.year}) in searches. Never search for outdated content.\n\n{content}"
         return content
 
     async def _register_blockchain(self, agent_id: str, name: str,

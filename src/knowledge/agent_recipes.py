@@ -243,6 +243,10 @@ def match_recipe(user_message: str) -> Dict:
     return {"recipe_id": "general", **RECIPES["general"]}
 
 
+# Tools that should ALWAYS be included for agents that will run multiple times
+MANDATORY_MEMORY_TOOLS = ["memory_write", "memory_read"]
+
+
 def get_recipe_context(user_message: str) -> str:
     """Generate a context block for the planning LLM with expert knowledge."""
     recipe = match_recipe(user_message)
@@ -262,4 +266,11 @@ def get_recipe_context(user_message: str) -> str:
         lines.append("  Known pitfalls to AVOID:")
         for p in recipe["pitfalls"]:
             lines.append(f"    ⚠ {p}")
+    lines.append("")
+    lines.append("  MANDATORY: ALWAYS include memory_write and memory_read tools.")
+    lines.append("  Without memory tools, agents cannot:")
+    lines.append("    - Store findings between loops (causes re-reading same sources)")
+    lines.append("    - Remember past runs (each run starts from zero)")
+    lines.append("    - Track what was already processed (causes duplicates)")
+    lines.append("    - Learn and improve over time")
     return "\n".join(lines)

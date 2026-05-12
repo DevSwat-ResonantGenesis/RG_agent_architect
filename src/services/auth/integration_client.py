@@ -22,7 +22,14 @@ async def get_integrations(user_id: str, token: str = "") -> Dict:
         async with httpx.AsyncClient(timeout=10.0) as c:
             r = await c.get(f"{AUTH_URL}/auth/integrations", headers=headers)
             if r.status_code == 200:
-                return r.json()
+                data = r.json()
+                # Ensure each integration has a consistent 'provider' field
+                # Auth service returns 'id' (hyphenated) and 'provider' (group)
+                # We need both for matching
+                for item in data.get("integrations", []):
+                    if "id" in item and "provider" not in item:
+                        item["provider"] = item["id"]
+                return data
     except Exception as e:
         logger.warning(f"[Auth] get integrations failed: {e}")
     return {"integrations": []}
@@ -47,12 +54,13 @@ async def get_integration_status(user_id: str, integration_id: str, token: str =
 
 def check_required_integrations(agent_tools: List[str], connected: List[str]) -> List[Dict]:
     """Return list of missing integrations with connect actions for frontend."""
+    # Maps tool names to auth service integration IDs (hyphenated)
     TOOL_TO_INTEGRATION = {
-        "google_sheets": "google_drive",
-        "documents": "google_docs",
+        "google_sheets": "google-drive",
+        "documents": "google-drive",
         "gmail": "gmail",
-        "google_calendar": "google_calendar",
-        "google_drive": "google_drive",
+        "google_calendar": "google-calendar",
+        "google_drive": "google-drive",
         "slack": "slack",
         "github": "github",
         "notion": "notion",
@@ -61,18 +69,27 @@ def check_required_integrations(agent_tools: List[str], connected: List[str]) ->
         "hubspot": "hubspot",
         "salesforce": "salesforce",
     }
+    # Normalize connected list: handle both "google-drive" and "google_drive" and "google"
+    connected_normalized = set()
+    for c in connected:
+        connected_normalized.add(c)
+        connected_normalized.add(c.replace("-", "_"))
+        connected_normalized.add(c.replace("_", "-"))
+
     missing = []
-    connected_set = set(connected)
     for tool in agent_tools:
         integration = TOOL_TO_INTEGRATION.get(tool)
-        if integration and integration not in connected_set:
-            missing.append({
-                "integration": integration,
-                "required_by": tool,
-                "action": "connect",
-                "connect_url": f"/oauth/{integration}/login",
-                "message": f"Connect {integration} to use {tool}",
-            })
+        if integration and integration not in connected_normalized:
+            # Also check if the provider group (e.g. "google") is connected
+            provider = integration.split("-")[0]
+            if provider not in connected_normalized:
+                missing.append({
+                    "integration": integration,
+                    "required_by": tool,
+                    "action": "connect",
+                    "connect_url": f"/settings/integrations",
+                    "message": f"Connect {integration.replace('-', ' ').title()} to use {tool}",
+                })
     return missing
 
 

@@ -96,8 +96,15 @@ class ToolExecutor:
 
     # ── Integrations / OAuth ──
     async def _tool_check_integrations(self, a):
-        connected = await integration_client.get_integrations(self.user_id)
-        connected_list = [i.get("provider", "") for i in connected.get("integrations", [])]
+        result = await integration_client.get_integrations(self.user_id)
+        integrations = result.get("integrations", [])
+        # Build connected list from BOTH id and provider fields, only if actually connected
+        connected_list = []
+        for i in integrations:
+            if i.get("connected"):
+                connected_list.append(i.get("id", ""))
+                connected_list.append(i.get("provider", ""))
+        connected_list = [c for c in connected_list if c]
         tools_raw = a.get("tools", "")
         if isinstance(tools_raw, str):
             tools_needed = [t.strip() for t in tools_raw.split(",") if t.strip()]
