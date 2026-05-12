@@ -431,7 +431,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         return result
 
     async def run_phase_6_test(self, agent_id: str, goal: str) -> Dict[str, Any]:
-        """Phase 6: TEST — run the agent and stream results."""
+        """Phase 6: TEST — run the agent, stream live steps, return final output."""
         await self._emit("phase", {"phase": "test", "message": "Running test execution..."})
 
         test_goal = f"Quick test: {goal[:100]}. Perform ONE step only and report what you found."
@@ -441,7 +441,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
                 resp = await client.post(
                     f"{AGENT_ENGINE_URL}/agents/{agent_id}/sessions",
                     headers=self.ws_db._headers,
-                    json={"goal": test_goal, "max_steps": 3, "test_mode": True},
+                    json={"goal": test_goal, "max_steps": 5, "test_mode": True, "mode": "autonomous"},
                 )
                 if resp.status_code not in (200, 201):
                     await self._emit("test_result", {
@@ -457,13 +457,14 @@ Respond with ONLY a JSON object (no markdown, no explanation):
                 return {"status": "skip", "note": "No session_id returned"}
 
             await self._emit("test_step", {
-                "message": f"Test session started ({session_id[:8]}...) — polling for results...",
+                "message": f"Test session started ({session_id[:8]}...)",
                 "session_id": session_id,
             })
 
-            # Poll for completion
+            # Poll for completion and stream live steps
             t0 = time.time()
-            for i in range(12):  # 12 × 5s = 60s max
+            last_step_count = 0
+            for i in range(24):  # 24 × 5s = 120s max
                 await asyncio.sleep(5)
                 try:
                     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -471,48 +472,83 @@ Respond with ONLY a JSON object (no markdown, no explanation):
                             f"{AGENT_ENGINE_URL}/agents/sessions/{session_id}",
                             headers=self.ws_db._headers,
                         )
-                        if poll.status_code == 200:
-                            data = poll.json()
-                            status = data.get("status", "")
-                            elapsed = time.time() - t0
+                        if poll.status_code != 200:
+                            continue
+                        data = poll.json()
+                        status = data.get("status", "")
+                        elapsed = time.time() - t0
 
+                        # Fetch and emit new steps as they appear
+                        steps = data.get("steps", [])
+                        if isinstance(steps, list) and len(steps) > last_step_count:
+                            for step in steps[last_step_count:]:
+                                step_type = step.get("action_type", step.get("type", "step"))
+                                reasoning = step.get("reasoning", "")
+                                tool_name = step.get("tool_name", "")
+                                output_preview = str(step.get("output", step.get("output_data", "")))[:300]
+                                await self._emit("test_step", {
+                                    "message": f"🔧 {tool_name}: {reasoning[:150]}" if tool_name else f"💭 {reasoning[:150]}",
+                                    "tool": tool_name,
+                                    "reasoning": reasoning[:300],
+                                    "output_preview": output_preview,
+                                    "status": status,
+                                })
+                            last_step_count = len(steps)
+                        elif status == "running":
                             await self._emit("test_step", {
-                                "message": f"Step {i+1}: status={status} ({elapsed:.0f}s)",
+                                "message": f"Running... ({elapsed:.0f}s)",
                                 "status": status,
                                 "elapsed_s": elapsed,
                             })
 
-                            if status in ("completed", "success", "done"):
-                                result = {
-                                    "status": "success",
-                                    "session_id": session_id,
-                                    "steps": data.get("steps_executed", 0),
-                                    "duration_s": elapsed,
-                                }
-                                await self._emit("test_result", {
-                                    "status": "success",
-                                    "message": f"✓ Test passed — {result['steps']} steps in {elapsed:.1f}s",
-                                    **result,
-                                })
-                                return result
-                            elif status in ("failed", "error", "cancelled"):
-                                result = {
-                                    "status": "failed",
-                                    "session_id": session_id,
-                                    "error": data.get("error", "unknown"),
-                                }
-                                await self._emit("test_result", {
-                                    "status": "failed",
-                                    "message": f"✗ Test failed: {result['error']}",
-                                    **result,
-                                })
-                                return result
+                        if status in ("completed", "success", "done"):
+                            final_output = data.get("final_output", "") or data.get("output", "")
+                            result = {
+                                "status": "success",
+                                "session_id": session_id,
+                                "steps": data.get("steps_executed", len(steps)),
+                                "duration_s": elapsed,
+                                "final_output": str(final_output)[:2000],
+                            }
+                            await self._emit("test_result", {
+                                "status": "success",
+                                "message": f"✓ Test passed — {result['steps']} steps in {elapsed:.1f}s",
+                                **result,
+                            })
+                            return result
+                        elif status in ("failed", "error", "cancelled"):
+                            result = {
+                                "status": "failed",
+                                "session_id": session_id,
+                                "error": data.get("error", data.get("error_message", "unknown")),
+                            }
+                            await self._emit("test_result", {
+                                "status": "failed",
+                                "message": f"✗ Test failed: {result['error']}",
+                                **result,
+                            })
+                            return result
+                        elif status in ("waiting_approval",):
+                            await self._emit("test_step", {
+                                "message": "⚠️ Approval required — auto-approving for test...",
+                                "status": status,
+                            })
+                            # Try to auto-approve for test runs
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as ac:
+                                    await ac.post(
+                                        f"{AGENT_ENGINE_URL}/agents/sessions/{session_id}/approve",
+                                        headers=self.ws_db._headers,
+                                        json={"approved": True},
+                                    )
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 
             await self._emit("test_result", {
                 "status": "timeout",
-                "message": "Test run timed out after 60s (agent may still be running)",
+                "message": "Test run timed out after 120s (agent may still be running)",
             })
             return {"status": "timeout", "session_id": session_id}
 

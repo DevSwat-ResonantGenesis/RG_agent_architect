@@ -389,6 +389,10 @@ class Orchestrator:
                         f"\n🧪 **Test passed** — {test_result.get('steps', 0)} steps "
                         f"in {test_result.get('duration_s', 0):.1f}s"
                     )
+                    # Include agent's final output in the chat
+                    final_output = test_result.get("final_output", "")
+                    if final_output:
+                        text_parts.append(f"\n📄 **Agent Output:**\n{final_output[:1500]}")
                     break
                 elif test_result.get("status") == "failed" and _attempt < 2:
                     error_msg = test_result.get("error", "unknown")
