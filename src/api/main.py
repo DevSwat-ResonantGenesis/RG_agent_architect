@@ -97,15 +97,20 @@ def get_orchestrator(workspace_id: str, user_id: str = "") -> Orchestrator:
 
 def _inject_conversation_history(orch: Orchestrator, req: MessageRequest):
     """Inject chat conversation history into the orchestrator so it has context.
-    Only injects on first message (empty history) to avoid duplication."""
+    Only injects on first message (empty history) to avoid duplication.
+    Builds a timeline-aware context so the LLM knows message ordering."""
     if not orch.history and req.conversation_history:
-        for msg in req.conversation_history:
+        # Sort by timestamp if available to ensure correct order
+        sorted_msgs = sorted(
+            req.conversation_history,
+            key=lambda m: m.get("timestamp", ""),
+        )
+        for msg in sorted_msgs:
             role = msg.get("role", "")
             content = msg.get("content", "")
             if role in ("user", "assistant") and content:
-                orch.history.append({"role": role, "content": content[:500]})
+                orch.history.append({"role": role, "content": content[:1000]})
     elif not orch.history and req.context:
-        # Backward compat: inject prev_assistant_content as single context message
         orch.history.append({"role": "assistant", "content": req.context[:1000]})
 
 

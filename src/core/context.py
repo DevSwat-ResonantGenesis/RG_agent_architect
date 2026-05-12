@@ -38,7 +38,16 @@ async def fetch_workspace_context(workspace_id: str, user_id: str = "") -> Dict[
     if isinstance(economy, Exception):
         economy = {"plan": "free", "credits_remaining": 0}
 
-    connected = [i.get("provider", "") for i in integrations.get("integrations", [])]
+    # Build connected list from both id and provider, only if actually connected
+    connected = []
+    for i in integrations.get("integrations", []):
+        if i.get("connected"):
+            _id = i.get("id", "")
+            _prov = i.get("provider", "")
+            if _id:
+                connected.append(_id)
+            if _prov and _prov != _id:
+                connected.append(_prov)
 
     return {
         "workspace": snapshot,

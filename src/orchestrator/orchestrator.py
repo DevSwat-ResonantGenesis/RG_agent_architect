@@ -125,6 +125,11 @@ class Orchestrator:
         if not self.context:
             return ""
         parts = []
+
+        # Current date/time so the LLM always knows when "now" is
+        now = datetime.now(timezone.utc)
+        parts.append(f"CURRENT DATE: {now.strftime('%Y-%m-%d %H:%M UTC')} (year {now.year})")
+
         ws = self.context.get("workspace", {})
         agents = ws.get("agents", [])
 
@@ -142,8 +147,17 @@ class Orchestrator:
                 status = a.get('status', 'active')
                 tools_list = a.get('tools', [])
                 tool_count = len(tools_list) if isinstance(tools_list, list) else 0
+                # Include recent run info if available
+                last_run = a.get('last_run', {})
+                run_info = ""
+                if last_run:
+                    run_outcome = last_run.get('outcome', '')
+                    run_error = last_run.get('error', '')[:100] if last_run.get('error') else ''
+                    run_info = f" | last_run:{run_outcome}"
+                    if run_error:
+                        run_info += f" error:{run_error}"
                 lines.append(
-                    f"  {icon} {name} (id:{aid}) — {goal} | tools:{tool_count} | status:{status}"
+                    f"  {icon} {name} (id:{aid}) — {goal} | tools:{tool_count} | status:{status}{run_info}"
                 )
             parts.append("AGENTS:\n" + "\n".join(lines))
         else:
