@@ -17,6 +17,8 @@ class ToolExecutor:
         self.ws_db = WorkspaceDB(workspace_id)
         self.memory = MemoryStore(workspace_id)
         self._user_api_keys = None
+        self._preferred_provider = ""
+        self._preferred_model = ""
 
     async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         handler = getattr(self, f"_tool_{tool_name}", None)
@@ -57,19 +59,19 @@ class ToolExecutor:
     # ── Build / Run ──
     async def _tool_build_agent(self, a):
         from src.builder.builder import Builder
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).build(
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db, preferred_provider=self._preferred_provider, preferred_model=self._preferred_model).build(
             name=a.get("name",""), goal=a.get("goal",""), icon=a.get("icon","🤖"),
             tools=a.get("tools", []), max_loops=a.get("max_loops", 30),
             temperature=a.get("temperature", 0.5), model=a.get("model", DEFAULT_MODEL))
     async def _tool_continue_build(self, a):
         from src.builder.builder import Builder
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).continue_build(a["agent_id"], a.get("instructions",""))
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db, preferred_provider=self._preferred_provider, preferred_model=self._preferred_model).continue_build(a["agent_id"], a.get("instructions",""))
     async def _tool_message_build(self, a):
         from src.builder.builder import Builder
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).message_build(a["agent_id"], a.get("message",""))
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db, preferred_provider=self._preferred_provider, preferred_model=self._preferred_model).message_build(a["agent_id"], a.get("message",""))
     async def _tool_run_agent(self, a):
         from src.runner.runner import Runner
-        return await Runner(self.workspace_id).run(a["agent_id"], a.get("goal"), user_id=self.user_id)
+        return await Runner(self.workspace_id, user_api_keys=self._user_api_keys).run(a["agent_id"], a.get("goal"), user_id=self.user_id)
     async def _tool_stop_run(self, a): return await self.ws_db.stop_run(a["run_id"])
     async def _tool_delete_agent(self, a): return await self.ws_db.delete_agent(a["agent_id"])
     async def _tool_delete_all_agents(self, a): return await self.ws_db.delete_all_agents()
@@ -81,7 +83,7 @@ class ToolExecutor:
         if a.get("max_loops"): updates["max_loops"] = int(a["max_loops"])
         if a.get("temperature"): updates["temperature"] = float(a["temperature"])
         if a.get("model"): updates["model"] = a["model"]
-        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db).modify_agent(
+        return await Builder(self.workspace_id, self.user_id, user_api_keys=self._user_api_keys, ws_db=self.ws_db, preferred_provider=self._preferred_provider, preferred_model=self._preferred_model).modify_agent(
             a["agent_id"], add_tools=add_tools, remove_tools=remove_tools, **updates)
 
     # ── Scheduling ──
@@ -254,7 +256,7 @@ class ToolExecutor:
             return {"error": f"Agent {agent_id} not found — cannot delegate"}
 
         agent_name = agent.get("name", "unknown")
-        runner = Runner(self.workspace_id)
+        runner = Runner(self.workspace_id, user_api_keys=self._user_api_keys)
         result = await runner.run(agent_id, goal_override=task, user_id=self.user_id)
         return {
             "delegated_to": agent_name,

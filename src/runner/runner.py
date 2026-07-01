@@ -49,8 +49,9 @@ async def _exec_fallback_tool(name: str, args: Dict) -> Any:
 
 
 class Runner:
-    def __init__(self, workspace_id: str):
+    def __init__(self, workspace_id: str, user_api_keys: Optional[Dict] = None):
         self.ws_db = WorkspaceDB(workspace_id)
+        self._user_api_keys = user_api_keys
 
     async def run(self, agent_id: str, goal_override: Optional[str] = None, user_id: str = "") -> Dict[str, Any]:
         agent = await self.ws_db.get_agent(agent_id)
@@ -195,7 +196,8 @@ class Runner:
         try:
             for loop in range(max_loops):
                 resp = await call_llm(messages=messages, tools=_FALLBACK_TOOLS,
-                                      model=model, temperature=temp, max_tokens=16000)
+                                      model=model, temperature=temp, max_tokens=16000,
+                                      user_api_keys=self._user_api_keys)
                 choice = resp.get("choices", [{}])[0]
                 msg = choice.get("message", {})
                 content = msg.get("content", "")

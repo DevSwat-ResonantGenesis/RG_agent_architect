@@ -80,6 +80,8 @@ class MessageRequest(BaseModel):
     context: str = ""  # previous assistant content (backward compat)
     conversation_history: List[Dict] = []  # [{"role": "user", "content": "..."}]
     user_api_keys: Dict = {}  # BYOK keys forwarded from chat service
+    preferred_provider: str = ""  # user-selected provider override, forwarded from chat service
+    preferred_model: str = ""  # user-selected model override, forwarded from chat service
 
 class RunEventRequest(BaseModel):
     workspace_id: str
@@ -127,6 +129,8 @@ async def handle_message(req: MessageRequest, request: Request):
     orch = get_orchestrator(req.workspace_id, req.user_id)
     if req.user_api_keys:
         orch._user_api_keys = req.user_api_keys
+    orch._preferred_provider = req.preferred_provider
+    orch._preferred_model = req.preferred_model
     _apply_auth_context(orch, request)
     _inject_conversation_history(orch, req)
     return await orch.handle_message(req.message)
@@ -145,6 +149,8 @@ async def handle_message_stream(req: MessageRequest, request: Request):
         print(f"[Architect] BYOK keys received: {list(req.user_api_keys.keys())}", flush=True)
     else:
         print("[Architect] WARNING: No BYOK keys received from chat service", flush=True)
+    orch._preferred_provider = req.preferred_provider
+    orch._preferred_model = req.preferred_model
     _apply_auth_context(orch, request)
     _inject_conversation_history(orch, req)
 

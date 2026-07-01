@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from src.core.config import AGENT_ENGINE_URL
-from src.core.llm_client import call_llm, call_llm_stream, DEFAULT_MODEL, FAST_MODEL, REASONING_MODEL
+from src.core.llm_client import call_llm, call_llm_stream, resolve_model, DEFAULT_MODEL, FAST_MODEL, REASONING_MODEL
 from src.services.billing import billing_client
 from src.services.memory.memory_store import MemoryStore
 from src.builder.agent_type_classifier import get_agent_type_classifier, fallback_classify
@@ -50,6 +50,8 @@ class BuildPipeline:
         emit: Callable,
         ws_db: Any,
         user_api_keys: Optional[Dict] = None,
+        preferred_provider: str = "",
+        preferred_model: str = "",
     ):
         self.workspace_id = workspace_id
         self.user_id = user_id
@@ -57,6 +59,8 @@ class BuildPipeline:
         self._emit = emit
         self.ws_db = ws_db
         self._user_api_keys = user_api_keys
+        self._preferred_provider = preferred_provider
+        self._preferred_model = preferred_model
 
         # Pipeline state — populated as we go
         self.research: Dict[str, Any] = {}
@@ -190,7 +194,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
 
             resp = await call_llm_stream(
                 messages=[{"role": "user", "content": plan_prompt}],
-                model=FAST_MODEL, max_tokens=2000, temperature=0.3,
+                model=resolve_model(self._preferred_provider, self._preferred_model, FAST_MODEL), max_tokens=2000, temperature=0.3,
                 user_api_keys=self._user_api_keys,
                 on_chunk=_on_plan_token,
             )
@@ -357,7 +361,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         resp = await call_llm_stream(messages=[
             {"role": "system", "content": builder_system},
             {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}\n\n{date_context}"}
-        ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4,
+        ], model=resolve_model(self._preferred_provider, self._preferred_model, REASONING_MODEL), max_tokens=8192, temperature=0.4,
             user_api_keys=self._user_api_keys,
             on_chunk=_on_prompt_token)
         prompt = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -393,6 +397,8 @@ Respond with ONLY a JSON object (no markdown, no explanation):
             self.workspace_id, self.user_id,
             on_progress=_fwd_progress,
             user_api_keys=self._user_api_keys,
+            preferred_provider=self._preferred_provider,
+            preferred_model=self._preferred_model,
         )
 
         # If duplicate, modify instead
@@ -583,7 +589,7 @@ Respond with ONLY a JSON object:
         try:
             resp = await call_llm(
                 messages=[{"role": "user", "content": diagnosis_prompt}],
-                model=FAST_MODEL, max_tokens=500, temperature=0.2,
+                model=resolve_model(self._preferred_provider, self._preferred_model, FAST_MODEL), max_tokens=500, temperature=0.2,
                 user_api_keys=self._user_api_keys,
             )
             content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")

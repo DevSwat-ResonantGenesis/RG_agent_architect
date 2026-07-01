@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
-from src.core.llm_client import call_llm, REASONING_MODEL, DEFAULT_MODEL, FAST_MODEL
+from src.core.llm_client import call_llm, resolve_model, REASONING_MODEL, DEFAULT_MODEL, FAST_MODEL
 from src.core.config import AGENT_ENGINE_URL
 from src.services.database.workspace_db import WorkspaceDB
 from src.services.blockchain import chain_client
@@ -39,12 +39,16 @@ class Builder:
     def __init__(self, workspace_id: str, user_id: str = "",
                  on_progress: Optional[Callable] = None,
                  user_api_keys: Optional[Dict] = None,
-                 ws_db: Optional["WorkspaceDB"] = None):
+                 ws_db: Optional["WorkspaceDB"] = None,
+                 preferred_provider: str = "",
+                 preferred_model: str = ""):
         self.workspace_id = workspace_id
         self.user_id = user_id or workspace_id
         self.ws_db = ws_db or WorkspaceDB(workspace_id)
         self._on_progress = on_progress
         self._user_api_keys = user_api_keys
+        self._preferred_provider = preferred_provider
+        self._preferred_model = preferred_model
 
     async def _emit(self, phase: str, message: str, data: Optional[Dict] = None):
         """Emit a progress event for SSE streaming."""
@@ -279,7 +283,7 @@ class Builder:
                 f"User wants to change:\n{message}\n\n"
                 "Output the FULL updated instruction block."
             )}
-        ], model=REASONING_MODEL, max_tokens=8192, user_api_keys=self._user_api_keys)
+        ], model=resolve_model(self._preferred_provider, self._preferred_model, REASONING_MODEL), max_tokens=8192, user_api_keys=self._user_api_keys)
         new_prompt = resp.get("choices", [{}])[0].get("message", {}).get("content", current)
         save_result = await self.ws_db.save_agent(
             agent_id=agent_id, name=agent["name"], goal=agent["goal"],
@@ -506,7 +510,7 @@ class Builder:
         resp = await call_llm(messages=[
             {"role": "system", "content": builder_system},
             {"role": "user", "content": f"Goal: {goal}\nAvailable tools: {tool_list}\n\n{date_context}"}
-        ], model=REASONING_MODEL, max_tokens=8192, temperature=0.4,
+        ], model=resolve_model(self._preferred_provider, self._preferred_model, REASONING_MODEL), max_tokens=8192, temperature=0.4,
             user_api_keys=self._user_api_keys)
         content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
         if not content:
@@ -752,7 +756,7 @@ class Builder:
                         "Be concrete and actionable."
                     ),
                 }],
-                model=FAST_MODEL, max_tokens=100, temperature=0.7,
+                model=resolve_model(self._preferred_provider, self._preferred_model, FAST_MODEL), max_tokens=100, temperature=0.7,
                 user_api_keys=self._user_api_keys,
             )
             suggestion = (resp.get("choices", [{}])[0]

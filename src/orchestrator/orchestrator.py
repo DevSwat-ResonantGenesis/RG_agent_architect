@@ -17,7 +17,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from src.core.config import HISTORY_DEPTH, ORCHESTRATOR_MAX_ITERATIONS, MAX_TOKENS
 from src.core.context import fetch_workspace_context
-from src.core.llm_client import call_llm, call_llm_stream, DEFAULT_MODEL
+from src.core.llm_client import call_llm, call_llm_stream, resolve_model, DEFAULT_MODEL
 from src.models.agent import OperationMode
 from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.build_pipeline import BuildPipeline
@@ -62,6 +62,9 @@ class Orchestrator:
         self.safety = get_safety()
         self._progress_queue: Optional[asyncio.Queue] = None
         self._user_api_keys: Optional[Dict[str, str]] = None
+        # User-selected provider/model override, forwarded from chat service
+        self._preferred_provider: str = ""
+        self._preferred_model: str = ""
         # Auth context forwarded from chat service
         self._is_superuser: bool = False
         self._unlimited_credits: bool = False
@@ -200,6 +203,8 @@ class Orchestrator:
         if not self.context:
             await self.initialize_session()
         self.tool_executor._user_api_keys = self._user_api_keys
+        self.tool_executor._preferred_provider = self._preferred_provider
+        self.tool_executor._preferred_model = self._preferred_model
         self.tool_executor.ws_db = self._make_ws_db()
         agents_exist = bool(self.context.get("workspace", {}).get("agents", []))
         mode = classify_mode(user_message, agents_exist)
@@ -230,6 +235,8 @@ class Orchestrator:
         if not self.context:
             await self.initialize_session()
         self.tool_executor._user_api_keys = self._user_api_keys
+        self.tool_executor._preferred_provider = self._preferred_provider
+        self.tool_executor._preferred_model = self._preferred_model
         self.tool_executor.ws_db = self._make_ws_db()
 
         agents_exist = bool(self.context.get("workspace", {}).get("agents", []))
@@ -302,6 +309,8 @@ class Orchestrator:
             emit=self._emit_progress,
             ws_db=ws_db,
             user_api_keys=self._user_api_keys,
+            preferred_provider=self._preferred_provider,
+            preferred_model=self._preferred_model,
         )
         self._pipeline = pipeline
         text_parts = []
@@ -614,7 +623,7 @@ class Orchestrator:
                 resp = await call_llm_stream(
                     messages=messages,
                     tools=selected_tools,
-                    model=DEFAULT_MODEL,
+                    model=resolve_model(self._preferred_provider, self._preferred_model, DEFAULT_MODEL),
                     temperature=0.5,
                     max_tokens=MAX_TOKENS,
                     user_api_keys=self._user_api_keys,
@@ -743,7 +752,7 @@ class Orchestrator:
 
                         summary_resp = await call_llm_stream(
                             messages=messages,
-                            model=DEFAULT_MODEL,
+                            model=resolve_model(self._preferred_provider, self._preferred_model, DEFAULT_MODEL),
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
                             user_api_keys=self._user_api_keys,
@@ -781,7 +790,7 @@ class Orchestrator:
 
                         err_resp = await call_llm_stream(
                             messages=messages,
-                            model=DEFAULT_MODEL,
+                            model=resolve_model(self._preferred_provider, self._preferred_model, DEFAULT_MODEL),
                             temperature=0.5,
                             max_tokens=MAX_TOKENS,
                             user_api_keys=self._user_api_keys,

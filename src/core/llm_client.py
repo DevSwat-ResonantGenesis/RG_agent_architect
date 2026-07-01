@@ -29,6 +29,15 @@ def _parse_provider_model(model_str: str):
     return None, model_str
 
 
+def resolve_model(preferred_provider: str, preferred_model: str, fallback: str) -> str:
+    """Combine an explicit user provider+model choice into the 'provider/model'
+    string this client's `model=` param expects, or fall back to the given
+    constant (DEFAULT_MODEL/FAST_MODEL/REASONING_MODEL) when no choice was made."""
+    if preferred_provider and preferred_model:
+        return f"{preferred_provider}/{preferred_model}"
+    return fallback
+
+
 async def call_llm(
     messages: List[Dict],
     tools: Optional[List[Dict]] = None,
