@@ -60,6 +60,17 @@ async def call_llm(
         logger.error(f"[LLM] call failed: {e}")
         raise
 
+    # DEFAULT_MODEL/FAST_MODEL/REASONING_MODEL are tokenrouter-prefixed, which
+    # forces strict mode in rg_llm (no cross-provider fallback). If TokenRouter
+    # is down/out of credit, retry once via auto-fallback so BYOK keys get tried.
+    if response.provider == "none" and user_api_keys:
+        logger.warning(f"[LLM] {provider or 'default'} unavailable, retrying via auto-fallback with BYOK keys")
+        fallback_request = LLMRequest(
+            messages=messages, provider=None, model="",
+            temperature=temperature, max_tokens=max_tokens, tools=tools,
+        )
+        response = await _client.complete(fallback_request, user_keys=user_api_keys)
+
     # Build OpenAI-compatible response dict for backward compat
     message: Dict[str, Any] = {"role": "assistant", "content": response.content or ""}
     if response.tool_calls:
@@ -122,8 +133,9 @@ async def call_llm_stream(
     actual_model = model_name
     usage: Dict[str, int] = {}
 
-    try:
-        async for event in _client.stream(request, user_keys=user_api_keys):
+    async def _consume(req: LLMRequest) -> None:
+        nonlocal accumulated_content, accumulated_tool_calls, actual_provider, actual_model, usage
+        async for event in _client.stream(req, user_keys=user_api_keys):
             if event.event == StreamEventType.CHUNK:
                 accumulated_content += event.content
                 if on_chunk and event.content:
@@ -142,9 +154,28 @@ async def call_llm_stream(
                 usage = event.usage or {}
             elif event.event == StreamEventType.ERROR:
                 raise Exception(event.error or "Streaming failed")
+
+    try:
+        await _consume(request)
     except Exception as e:
-        logger.error(f"[LLM-stream] failed: {e}")
-        raise
+        # DEFAULT_MODEL/FAST_MODEL/REASONING_MODEL are tokenrouter-prefixed,
+        # which forces strict mode in rg_llm (no cross-provider fallback). If
+        # TokenRouter is down/out of credit, retry once via auto-fallback so
+        # BYOK keys get tried — but only if nothing has streamed to the user yet.
+        if user_api_keys and not accumulated_content and not accumulated_tool_calls:
+            logger.warning(f"[LLM-stream] {provider or 'default'} unavailable ({e}), retrying via auto-fallback with BYOK keys")
+            fallback_request = LLMRequest(
+                messages=messages, provider=None, model="",
+                temperature=temperature, max_tokens=max_tokens, tools=tools,
+            )
+            try:
+                await _consume(fallback_request)
+            except Exception as e2:
+                logger.error(f"[LLM-stream] fallback also failed: {e2}")
+                raise
+        else:
+            logger.error(f"[LLM-stream] failed: {e}")
+            raise
 
     # Build OpenAI-compatible response dict
     message: Dict[str, Any] = {"role": "assistant", "content": accumulated_content}
