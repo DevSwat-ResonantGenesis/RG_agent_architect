@@ -606,8 +606,16 @@ class Orchestrator:
             logger.warning(f"[Orch] Tool classifier failed, using all tools: {e}")
 
         # Filter ORCHESTRATOR_TOOLS to only the selected subset
-        # Always include present_options so the LLM can show interactive buttons
-        ALWAYS_INCLUDE = {"present_options", "get_current_time", "workspace_snapshot"}
+        # Always include present_options so the LLM can show interactive buttons.
+        # update_agent_config/prompt and schedule tools are also always-on: the
+        # single-group classifier below picks ONE intent per message, so a request
+        # that mixes intents (e.g. "update this agent and schedule it daily") would
+        # otherwise lose whichever tool wasn't in the winning group.
+        ALWAYS_INCLUDE = {
+            "present_options", "get_current_time", "workspace_snapshot",
+            "update_agent_config", "update_agent_prompt",
+            "create_schedule", "set_trigger", "list_schedules", "update_schedule", "delete_schedule",
+        }
         if selected_tool_names and predicted_group != "none":
             _active_tool_names = set(selected_tool_names) | ALWAYS_INCLUDE
             selected_tools = [t for t in ORCHESTRATOR_TOOLS
