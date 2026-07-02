@@ -17,7 +17,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
-from src.core.llm_client import call_llm, resolve_model, REASONING_MODEL, DEFAULT_MODEL, FAST_MODEL
+from src.core.llm_client import (
+    call_llm, resolve_model, probe_working_provider, infer_capability, PROBE_TOOLS,
+    REASONING_MODEL, DEFAULT_MODEL, FAST_MODEL,
+)
 from src.core.config import AGENT_ENGINE_URL
 from src.services.database.workspace_db import WorkspaceDB
 from src.services.blockchain import chain_client
@@ -33,6 +36,7 @@ TESTABLE_TOOLS = {
     "web_search": {"query": "test", "context": "verification"},
     "fetch_url": {"url": "https://httpbin.org/get"},
 }
+
 
 
 class Builder:
@@ -76,18 +80,24 @@ class Builder:
         await self._emit("research", "Running pre-build research...")
         research = await self._pre_build_research(goal, model)
         if research.get("block"):
-            await self._emit("error", research["block"])
-            return {"error": research["block"], "outcome": "FAIL", "name": name}
+            await self._emit("error", research["block"], {
+                "connect_provider_prompt": research.get("connect_provider_prompt"),
+            })
+            return {
+                "error": research["block"], "outcome": "FAIL", "name": name,
+                "connect_provider_prompt": research.get("connect_provider_prompt"),
+            }
         if research.get("warnings"):
             for w in research["warnings"]:
                 await self._emit("research_warning", w)
-        if research.get("model_override"):
-            model = research["model_override"]
-            await self._emit("research", f"Switched model to {model} (original unhealthy)")
+        if research.get("resolved_provider") and research.get("resolved_model"):
+            model = f"{research['resolved_provider']}/{research['resolved_model']}"
+            await self._emit("research", f"Resolved working provider: {model}")
         await self._emit("research", "Pre-build research complete",
                          {"credits": research.get("credits"),
                           "integrations": research.get("integrations"),
                           "provider_ok": research.get("provider_ok"),
+                          "provider_is_temporary": research.get("provider_is_temporary"),
                           "memory_context": research.get("memory_context", "")[:200]})
 
         # ── PHASE -1: Neural tool selection from Agent Engine (161+ tools) ──
@@ -164,13 +174,10 @@ class Builder:
         await self._emit("verifying", "Agent verified in database",
                          {"agent_name": verified_agent.get("name", name)})
 
-        # ── PHASE 4: Blockchain registration (parallel, non-blocking) ──
-        await self._emit("blockchain", "Registering agent identity on blockchain...")
-        identity_hash, wallet_addr = await self._register_blockchain(
-            agent_id, name, goal)
-        await self._emit("blockchain", "Blockchain registration complete",
-                         {"identity_hash": identity_hash[:32] if identity_hash else "",
-                          "wallet": wallet_addr[:16] if wallet_addr else ""})
+        # PHASE 4 (blockchain identity registration) moved to AFTER real
+        # verification (below) — an agent shouldn't get its platform identity
+        # registered until it's actually confirmed working, not just saved.
+        identity_hash, wallet_addr = "", ""
 
         # ── PHASE 5: Store build run record ──
         run_result = await self.ws_db.save_run(
@@ -214,6 +221,40 @@ class Builder:
                                  f"Test run issue: {test_run.get('note', 'unknown')}",
                                  test_run)
 
+        # ── Gate: only activate + register identity if verification actually
+        # passed. An agent that fails here stays in "needs_attention" —
+        # visible to the user, clearly flagged, NOT silently reported done.
+        # When skip_test=True, a caller (BuildPipeline) owns its own test
+        # phase and activation decision afterward — leave this agent in
+        # "draft" rather than deciding (and potentially registering its
+        # identity) prematurely on Builder's incomplete view of the outcome. ──
+        owns_activation_decision = not skip_test
+        test_ok = skip_test or test_run.get("status") == "success" or (
+            test_run.get("status") == "retried" and test_run.get("retry_ok")
+        )
+        checklist_ok = tools_ok and test_ok and research.get("provider_ok", True)
+
+        failing_tools = [r["tool"] for r in test_results if not r["ok"]]
+        reasons = []
+        if failing_tools:
+            reasons.append(f"tools not working: {', '.join(failing_tools)}")
+        if not test_ok:
+            reasons.append(f"test run failed: {test_run.get('note', 'unknown issue')}")
+        if not research.get("provider_ok", True):
+            reasons.append("LLM provider issue")
+        reason = "; ".join(reasons) or "verification did not pass"
+
+        if owns_activation_decision:
+            if checklist_ok:
+                await self._emit("blockchain", "Registering agent identity on blockchain...")
+                identity_hash, wallet_addr = await self._register_blockchain(agent_id, name, goal)
+                await self._emit("blockchain", "Blockchain registration complete",
+                                 {"identity_hash": identity_hash[:32] if identity_hash else "",
+                                  "wallet": wallet_addr[:16] if wallet_addr else ""})
+                await self.ws_db.activate_agent(agent_id)
+            else:
+                await self.ws_db.mark_needs_attention(agent_id, reason)
+
         # ── PHASE 8: Store memory ──
         mem = MemoryStore(self.workspace_id, agent_id)
         await mem.store_agent_learning(
@@ -229,20 +270,34 @@ class Builder:
             await self._emit("offers", "Suggestions for your new agent:",
                              {"offers": offers})
 
-        await self._emit("complete", f"Agent '{name}' created and verified successfully!")
+        if not owns_activation_decision:
+            # A caller (BuildPipeline) still has its own test phase to run
+            # and owns the final activation decision — don't declare success
+            # or failure yet, just report what's known so far.
+            await self._emit("complete", f"'{name}' built — running final verification...")
+        elif checklist_ok:
+            await self._emit("complete", f"Agent '{name}' created and verified successfully!")
+            logger.info(f"[Builder] VERIFIED agent {agent_id}: {name} | "
+                         f"tools_ok={tools_ok} chain={identity_hash[:16]}...")
+        else:
+            await self._emit("complete",
+                             f"Built '{name}' but couldn't fully verify it — {reason}. "
+                             f"It's saved in needs_attention and won't be fully active until this is resolved.")
+            logger.warning(f"[Builder] Agent {agent_id} ({name}) left in needs_attention: {reason}")
 
-        logger.info(f"[Builder] VERIFIED agent {agent_id}: {name} | "
-                     f"tools_ok={tools_ok} chain={identity_hash[:16]}...")
         return {
             "agent_id": agent_id, "name": name, "run_id": run_id,
-            "outcome": "SUCCESS",
+            "outcome": "SUCCESS" if (not owns_activation_decision or checklist_ok) else "PARTIAL",
             "identity_hash": identity_hash,
             "wallet_address": wallet_addr,
             "tools_tested": test_results,
             "tools_all_ok": tools_ok,
             "test_run": test_run,
             "offers": offers,
-            "verified": True,
+            "verified": checklist_ok if owns_activation_decision else None,
+            "status": "active" if (owns_activation_decision and checklist_ok) else (
+                "needs_attention" if owns_activation_decision else "draft"
+            ),
         }
 
     async def continue_build(self, agent_id: str, instructions: str) -> Dict:
@@ -356,7 +411,9 @@ class Builder:
         result: Dict[str, Any] = {
             "block": None, "warnings": [], "credits": {},
             "integrations": {}, "provider_ok": True,
-            "model_override": None, "memory_context": "",
+            "resolved_provider": None, "resolved_model": None,
+            "provider_is_temporary": False, "provider_temporary_reason": None,
+            "ideal_provider": None, "memory_context": "",
         }
 
         async def _check_credits():
@@ -389,29 +446,54 @@ class Builder:
                 logger.warning(f"[Research] Integration check failed: {e}")
 
         async def _check_provider_health():
+            """Find a working provider FIRST, instead of testing what was
+            already picked and reactively swapping to a hardcoded fallback
+            (that fallback, TokenRouter, has itself been unreliable — the
+            old pattern could silently swap into another dead model)."""
+            capability = infer_capability(goal)
             try:
-                test_resp = await call_llm(
-                    messages=[{"role": "user", "content": "Reply with OK"}],
-                    model=model, max_tokens=5, temperature=0,
+                probe = await probe_working_provider(
+                    capability=capability,
+                    tools=PROBE_TOOLS,
                     user_api_keys=self._user_api_keys,
                 )
-                content = (test_resp.get("choices", [{}])[0]
-                           .get("message", {}).get("content", ""))
-                if not content:
-                    result["provider_ok"] = False
-                    result["warnings"].append(
-                        f"Provider {model} returned empty response. "
-                        "Switching to fallback model."
-                    )
-                    result["model_override"] = DEFAULT_MODEL
             except Exception as e:
                 result["provider_ok"] = False
-                result["warnings"].append(
-                    f"Provider {model} health check failed: {str(e)[:80]}. "
-                    "Switching to fallback model."
+                result["block"] = f"Provider check failed unexpectedly: {str(e)[:200]}"
+                logger.warning(f"[Research] Provider probe raised for capability={capability}: {e}")
+                return
+
+            if not probe["provider"]:
+                # Nothing works at all — system keys and BYOK keys both
+                # failed for every provider. Don't silently proceed with a
+                # doomed build; block and say exactly what would unblock it.
+                result["provider_ok"] = False
+                result["block"] = (
+                    f"I can't build this agent yet — none of the available providers "
+                    f"(system or your own keys) can currently serve {capability} tasks. "
+                    f"Add your own API key for {probe['ideal_provider']} in "
+                    f"Settings → Connect Profiles to unblock this."
                 )
-                result["model_override"] = DEFAULT_MODEL
-                logger.warning(f"[Research] Provider health failed for {model}: {e}")
+                result["connect_provider_prompt"] = {
+                    "capability": capability,
+                    "suggested_providers": [probe["ideal_provider"]],
+                }
+                logger.warning(f"[Research] No working provider for capability={capability}")
+                return
+
+            result["provider_ok"] = True
+            result["resolved_provider"] = probe["provider"]
+            result["resolved_model"] = probe["model"]
+            if not probe["is_ideal"]:
+                reason = (
+                    f"No working {probe['ideal_provider']} key available for {capability} "
+                    f"tasks — using {probe['provider']} temporarily. Add a "
+                    f"{probe['ideal_provider']} key to upgrade this agent."
+                )
+                result["provider_is_temporary"] = True
+                result["provider_temporary_reason"] = reason
+                result["ideal_provider"] = probe["ideal_provider"]
+                result["warnings"].append(reason)
 
         async def _check_memory_context():
             try:

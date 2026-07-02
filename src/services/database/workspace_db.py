@@ -49,8 +49,18 @@ class WorkspaceDB:
     async def save_agent(self, agent_id: str, name: str, goal: str, icon: str = "🤖",
                          system_prompt: str = "", tools: list = None, needs_build: bool = True,
                          max_loops: int = 30, temperature: float = 0.5,
-                         model: str = "llama-3.3-70b-versatile") -> Dict:
-        """Create or update an agent via Agent Engine API."""
+                         model: str = "llama-3.3-70b-versatile",
+                         provider_is_temporary: bool = False,
+                         provider_temporary_reason: Optional[str] = None,
+                         ideal_provider: Optional[str] = None) -> Dict:
+        """Create or update an agent via Agent Engine API.
+
+        New agents are saved as status="draft" — NOT immediately active/live
+        — until the build pipeline's verification checklist passes and
+        activate_agent() is called. This is the sandbox-gating point: a
+        broken agent never gets full platform access (DSID registration)
+        just for having been saved.
+        """
         provider = model.split("/")[0] if "/" in model else ""
         model_name = model.split("/", 1)[1] if "/" in model else model
         payload = {
@@ -65,13 +75,19 @@ class WorkspaceDB:
             "tools": tools or [],
             "safety_config": {"max_loops": max_loops, "max_tokens_per_run": 500000},
             "is_active": True,
+            "status": "draft",
+            "provider_is_temporary": provider_is_temporary,
+            "provider_temporary_reason": provider_temporary_reason,
+            "ideal_provider": ideal_provider,
         }
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                # Try PATCH first (update existing)
+                # Try PATCH first (update existing) — don't reset status/DSID
+                # state on a plain update of an already-live agent.
+                update_payload = {k: v for k, v in payload.items() if k != "status"}
                 resp = await client.patch(
                     f"{AGENT_ENGINE_URL}/agents/{agent_id}",
-                    headers=self._headers, json=payload,
+                    headers=self._headers, json=update_payload,
                 )
                 if resp.status_code == 200:
                     return {"agent_id": agent_id, "saved": True, "action": "updated"}
@@ -88,6 +104,42 @@ class WorkspaceDB:
         except Exception as e:
             logger.error(f"[WorkspaceDB] save_agent error: {e}")
             return {"agent_id": agent_id, "saved": False, "error": str(e)}
+
+    async def activate_agent(self, agent_id: str) -> Dict:
+        """Transition an agent from draft/verifying to active — the
+        sandbox-gated go-live point. Only call this after the build
+        pipeline's verification checklist has actually passed."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.patch(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                    headers=self._headers, json={"status": "active"},
+                )
+                if resp.status_code == 200:
+                    return {"agent_id": agent_id, "activated": True}
+                logger.warning(f"[WorkspaceDB] activate_agent failed: {resp.status_code} {resp.text[:200]}")
+                return {"agent_id": agent_id, "activated": False, "error": resp.text[:200]}
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] activate_agent error: {e}")
+            return {"agent_id": agent_id, "activated": False, "error": str(e)}
+
+    async def mark_needs_attention(self, agent_id: str, reason: str) -> Dict:
+        """Leave an agent visibly flagged as needing attention (verification
+        failed after bounded retries) instead of silently active or hidden."""
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.patch(
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}",
+                    headers=self._headers,
+                    json={"status": "needs_attention", "provider_temporary_reason": reason[:2000]},
+                )
+                if resp.status_code == 200:
+                    return {"agent_id": agent_id, "marked": True}
+                logger.warning(f"[WorkspaceDB] mark_needs_attention failed: {resp.status_code} {resp.text[:200]}")
+                return {"agent_id": agent_id, "marked": False, "error": resp.text[:200]}
+        except Exception as e:
+            logger.error(f"[WorkspaceDB] mark_needs_attention error: {e}")
+            return {"agent_id": agent_id, "marked": False, "error": str(e)}
 
     async def get_agent(self, agent_id: str) -> Optional[Dict]:
         """Get a single agent by ID from Agent Engine."""

@@ -23,7 +23,10 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from src.core.config import AGENT_ENGINE_URL
-from src.core.llm_client import call_llm, call_llm_stream, resolve_model, DEFAULT_MODEL, FAST_MODEL, REASONING_MODEL
+from src.core.llm_client import (
+    call_llm, call_llm_stream, resolve_model, probe_working_provider, infer_capability, PROBE_TOOLS,
+    DEFAULT_MODEL, FAST_MODEL, REASONING_MODEL,
+)
 from src.services.billing import billing_client
 from src.services.memory.memory_store import MemoryStore
 from src.builder.agent_type_classifier import get_agent_type_classifier, fallback_classify
@@ -247,48 +250,77 @@ Respond with ONLY a JSON object (no markdown, no explanation):
         return plan
 
     async def run_phase_3_verify(self, final_plan: Dict) -> Dict[str, Any]:
-        """Phase 3: VERIFY — test provider, check tool connections."""
+        """Phase 3: VERIFY — find a working provider FIRST (instead of testing
+        whatever the plan picked and reactively swapping to a hardcoded
+        fallback), then check tool connections. Builds a checklist that
+        callers use to actually gate success, not just display warnings."""
         await self._emit("phase", {"phase": "verify", "message": "Verifying everything works..."})
 
-        model = final_plan.get("model", DEFAULT_MODEL)
+        goal = final_plan.get("goal", self.user_message)
         tools = final_plan.get("tools", [])
-        verification: Dict[str, Any] = {"provider_ok": True, "tools_checked": [], "warnings": []}
+        capability = infer_capability(goal)
 
-        # Test LLM provider
-        await self._emit("verify_step", {"step": "provider", "message": f"Testing {model}..."})
+        checklist: Dict[str, Any] = {
+            "model_verified": {"status": "pending"},
+            "tools": {},
+            "end_to_end_test": {"status": "pending", "attempts": 0},
+        }
+        verification: Dict[str, Any] = {
+            "provider_ok": True, "tools_checked": [], "warnings": [],
+            "resolved_provider": None, "resolved_model": None,
+            "provider_is_temporary": False, "provider_temporary_reason": None,
+            "ideal_provider": None, "block": None, "checklist": checklist,
+        }
+
+        await self._emit("verify_step", {"step": "provider", "message": f"Finding a working provider for {capability} tasks..."})
         try:
-            test_resp = await call_llm(
-                messages=[{"role": "user", "content": "Reply with OK"}],
-                model=model, max_tokens=5, temperature=0,
-                user_api_keys=self._user_api_keys,
+            probe = await probe_working_provider(
+                capability=capability, tools=PROBE_TOOLS, user_api_keys=self._user_api_keys,
             )
-            content = (test_resp.get("choices", [{}])[0]
-                       .get("message", {}).get("content", ""))
-            if content:
-                verification["provider_ok"] = True
-                await self._emit("verify_step", {"step": "provider", "status": "ok",
-                                                  "message": f"✓ {model} is responding"})
-            else:
-                verification["provider_ok"] = False
-                verification["warnings"].append(f"{model} returned empty response")
-                await self._emit("verify_step", {"step": "provider", "status": "fail",
-                                                  "message": f"✗ {model} returned empty — will use fallback"})
         except Exception as e:
+            probe = {"provider": "", "model": "", "is_ideal": False, "ideal_provider": capability}
+            logger.warning(f"[Pipeline] Provider probe raised: {e}")
+
+        if not probe["provider"]:
             verification["provider_ok"] = False
-            verification["warnings"].append(f"{model} failed: {str(e)[:80]}")
-            await self._emit("verify_step", {"step": "provider", "status": "fail",
-                                              "message": f"✗ {model} not responding — will use fallback"})
+            verification["block"] = (
+                f"None of the available providers (system or your own keys) can currently serve "
+                f"{capability} tasks. Add your own API key for {probe['ideal_provider']} in "
+                f"Settings → Connect Profiles to unblock this."
+            )
+            verification["connect_provider_prompt"] = {
+                "capability": capability, "suggested_providers": [probe["ideal_provider"]],
+            }
+            checklist["model_verified"] = {"status": "fail", "detail": verification["block"]}
+            await self._emit("verify_step", {"step": "provider", "status": "fail", "message": f"✗ {verification['block']}"})
+        else:
+            verification["resolved_provider"] = probe["provider"]
+            verification["resolved_model"] = probe["model"]
+            checklist["model_verified"] = {"status": "pass", "detail": f"{probe['provider']}/{probe['model']}"}
+            await self._emit("verify_step", {"step": "provider", "status": "ok",
+                                              "message": f"✓ {probe['provider']}/{probe['model']} is responding"})
+            if not probe["is_ideal"]:
+                reason = (
+                    f"No working {probe['ideal_provider']} key available for {capability} tasks — "
+                    f"using {probe['provider']} temporarily. Add a {probe['ideal_provider']} key to upgrade."
+                )
+                verification["provider_is_temporary"] = True
+                verification["provider_temporary_reason"] = reason
+                verification["ideal_provider"] = probe["ideal_provider"]
+                verification["warnings"].append(reason)
 
         # Check tool connections (for OAuth tools)
         connected = self.research.get("integrations", {})
         connected_list = connected.get("connected", []) if isinstance(connected, dict) else []
         for tool in tools[:8]:
             if tool in connected_list:
+                checklist["tools"][tool] = {"status": "pass", "detail": "connected"}
                 verification["tools_checked"].append({"tool": tool, "ok": True, "note": "connected"})
                 await self._emit("verify_step", {"step": "tool", "tool": tool, "status": "ok",
                                                   "message": f"✓ {tool} — connected"})
             elif tool in ("web_search", "fetch_url", "scrape_page", "deep_research",
                           "news_search", "image_search", "stock_market_data"):
+                checklist["tools"][tool] = {"status": "pass", "detail": "builtin"}
                 verification["tools_checked"].append({"tool": tool, "ok": True, "note": "builtin"})
                 await self._emit("verify_step", {"step": "tool", "tool": tool, "status": "ok",
                                                   "message": f"✓ {tool} — built-in, always available"})
@@ -299,6 +331,7 @@ Respond with ONLY a JSON object (no markdown, no explanation):
                     "salesforce", "airtable", "linear", "asana", "clickup",
                 )
                 if needs_oauth:
+                    checklist["tools"][tool] = {"status": "not_connected", "detail": "needs OAuth connection"}
                     verification["tools_checked"].append({"tool": tool, "ok": False, "note": "not connected"})
                     verification["warnings"].append(f"{tool} requires OAuth connection")
                     await self._emit("verify_step", {
@@ -306,13 +339,18 @@ Respond with ONLY a JSON object (no markdown, no explanation):
                         "message": f"⚠ {tool} — needs OAuth connection (go to Settings → Integrations)"
                     })
                 else:
+                    checklist["tools"][tool] = {"status": "pass", "detail": "available"}
                     verification["tools_checked"].append({"tool": tool, "ok": True, "note": "available"})
                     await self._emit("verify_step", {"step": "tool", "tool": tool, "status": "ok",
                                                       "message": f"✓ {tool} — available"})
 
         self.verification = verification
 
-        all_ok = verification["provider_ok"] and not verification.get("warnings")
+        required_tools_ok = all(v["status"] != "not_connected" for v in checklist["tools"].values())
+        all_ok = verification["provider_ok"] and required_tools_ok
+        checklist["all_ok"] = all_ok
+        verification["all_ok"] = all_ok
+
         await self._emit("verify_complete", {
             "all_ok": all_ok,
             "provider_ok": verification["provider_ok"],

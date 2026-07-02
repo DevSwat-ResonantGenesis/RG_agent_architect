@@ -8,7 +8,7 @@ import inspect
 import logging
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
-from rg_llm import UnifiedLLMClient, LLMRequest, LLMStreamEvent, StreamEventType
+from rg_llm import UnifiedLLMClient, LLMRequest, LLMStreamEvent, StreamEventType, ideal_provider_for
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,89 @@ def resolve_model(preferred_provider: str, preferred_model: str, fallback: str) 
     if preferred_provider and preferred_model:
         return f"{preferred_provider}/{preferred_model}"
     return fallback
+
+
+# Keyword hints for inferring which capability an agent's goal mostly needs —
+# a small explicit heuristic (no cross-service capability router is reachable
+# from this codebase; see rg_llm.capabilities for the canonical provider tags).
+# Shared by builder.py and build_pipeline.py so both use one resolution path.
+_CAPABILITY_KEYWORDS = {
+    "coding": ["code", "coding", "program", "develop", "debug", "script", "software"],
+    "image": ["image", "picture", "photo", "illustration", "graphic", "artwork"],
+    "voice": ["voice", "audio", "podcast", "narration", "speech", "tts"],
+    "long_context": ["large document", "long document", "entire codebase", "whole book"],
+    "vision": ["screenshot", "look at this image", "analyze this photo"],
+}
+
+
+def infer_capability(goal: str) -> str:
+    """Best-effort guess at which rg_llm capability tag fits this agent's goal."""
+    low = (goal or "").lower()
+    for capability, keywords in _CAPABILITY_KEYWORDS.items():
+        if any(kw in low for kw in keywords):
+            return capability
+    return "general"
+
+
+# A representative tool schema for probing — biases the probe toward a model
+# that's reliable at tool-calling, since every built agent gets memory tools.
+PROBE_TOOLS = [{
+    "type": "function",
+    "function": {
+        "name": "memory_write",
+        "description": "Store a memory for later recall.",
+        "parameters": {"type": "object", "properties": {"content": {"type": "string"}}},
+    },
+}]
+
+
+async def probe_working_provider(
+    capability: str = "general",
+    tools: Optional[List[Dict]] = None,
+    user_api_keys: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Find which provider (system key or the user's own BYOK key) actually
+    works for a given capability, BEFORE committing an agent to a model —
+    replaces the old pattern of picking a model first and testing it after
+    the fact.
+
+    Sends one minimal real request biased toward the ideal provider for
+    `capability`. Because rg_llm's fallback chain now cascades through every
+    provider/key (system then BYOK, across the whole fallback order) whenever
+    the preferred one fails, this single call is enough to discover both
+    "does anything work at all" and "did we get the ideal provider, or a
+    working substitute."
+
+    Returns:
+        provider: "" if nothing works at all, else the provider id that
+            actually answered.
+        is_ideal: whether that provider is the best fit for `capability`
+            (False means a substitute was used and the caller should mark
+            it as temporary).
+        ideal_provider: the provider id that would have been ideal.
+        model / was_fallback / fallback_chain: as returned by rg_llm, for
+            diagnostics and user-facing messaging.
+    """
+    ideal = ideal_provider_for(capability)
+    request = LLMRequest(
+        messages=[{"role": "user", "content": "Reply with the single word: OK"}],
+        provider=ideal,
+        model=None,
+        max_tokens=5,
+        tools=tools,
+    )
+    response = await _client.complete(request, user_keys=user_api_keys)
+    provider = response.provider or ""
+    if provider == "none":
+        provider = ""
+    return {
+        "provider": provider,
+        "model": response.model or "",
+        "was_fallback": response.was_fallback,
+        "fallback_chain": response.fallback_chain or [],
+        "ideal_provider": ideal,
+        "is_ideal": bool(provider) and provider == ideal,
+    }
 
 
 async def call_llm(

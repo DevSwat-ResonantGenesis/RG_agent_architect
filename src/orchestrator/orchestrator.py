@@ -361,13 +361,25 @@ class Orchestrator:
 
         # ── Phase 3: VERIFY ──
         verification = await pipeline.run_phase_3_verify(plan)
-        if not verification.get("provider_ok"):
-            plan["model"] = DEFAULT_MODEL
-            text_parts.append("\n⚠️ Provider issue — switched to fallback model.")
+        if verification.get("block"):
+            # No provider works at all — don't proceed with a doomed build.
+            text_parts.append(f"\n❌ {verification['block']}")
+            await self._emit_progress("text", {"content": "\n".join(text_parts)})
+            self._pipeline = None
+            self._pipeline_phase = None
+            return {
+                "text": "\n".join(text_parts), "mode": "control",
+                "connect_provider_prompt": verification.get("connect_provider_prompt"),
+            }
+        if verification.get("resolved_provider") and verification.get("resolved_model"):
+            plan["model"] = f"{verification['resolved_provider']}/{verification['resolved_model']}"
+        if verification.get("provider_is_temporary"):
+            text_parts.append(f"\n⚠️ {verification.get('provider_temporary_reason', 'Using a temporary provider substitute.')}")
         else:
             text_parts.append(f"\n✅ **Verification passed** — {plan.get('model', '')} responding, tools ready")
         for w in verification.get("warnings", []):
-            text_parts.append(f"  - ⚠️ {w}")
+            if w != verification.get("provider_temporary_reason"):
+                text_parts.append(f"  - ⚠️ {w}")
         await self._emit_progress("text", {"content": "\n".join(text_parts)})
 
         # ── Phase 4: GENERATE PROMPT ──
@@ -423,6 +435,25 @@ class Orchestrator:
                     text_parts.append(f"\nℹ️ Test: {test_result.get('status', 'skipped')}")
                     break
 
+            # ── Gate: only activate + register identity if the test actually
+            # passed. This is the sandbox-gated go-live point for the guided
+            # pipeline flow — an agent that never got a working test stays
+            # visibly flagged as needs_attention, not silently "done". ──
+            pipeline_checklist_ok = bool(test_result) and test_result.get("status") == "success"
+            if pipeline_checklist_ok:
+                await pipeline.ws_db.activate_agent(agent_id)
+            else:
+                fail_reason = (test_result or {}).get("error") or (test_result or {}).get("note") or (
+                    f"test status: {(test_result or {}).get('status', 'unknown')}"
+                )
+                await pipeline.ws_db.mark_needs_attention(agent_id, fail_reason)
+                text_parts.append(
+                    f"\n⚠️ '{plan.get('name', 'Agent')}' is saved in **needs_attention** — "
+                    f"couldn't confirm it works end-to-end ({fail_reason}). "
+                    f"It won't be fully active until this is resolved."
+                )
+                await self._emit_progress("text", {"content": "\n".join(text_parts)})
+
             # ── Phase 7: OFFERS ──
             offers = await pipeline.generate_offers(
                 agent_id, plan.get("name", ""),
@@ -464,6 +495,7 @@ class Orchestrator:
                 "text": text, "mode": "control",
                 "pipeline_phase": "waiting_post_build",
                 "agent_id": agent_id,
+                "agent_status": "active" if pipeline_checklist_ok else "needs_attention",
                 "build_result": build_result,
                 "test_result": test_result,
                 "offers": offers,
@@ -522,6 +554,11 @@ class Orchestrator:
     # ── Core LLM loop (for non-build intents) ──
 
     async def _run_loop(self, mode: OperationMode) -> Dict[str, Any]:
+        # Reset per-turn multi-agent-plan state — declare_multi_agent_plan()
+        # sets this if the LLM calls it during THIS loop; without a fresh
+        # reset it could otherwise leak from a previous message.
+        self.tool_executor._multi_agent_plan_active = False
+
         # Always refresh workspace context before each loop — prevents stale state
         try:
             await self.initialize_session()
@@ -735,8 +772,18 @@ class Orchestrator:
                     "message": _tool_result_message(name, result),
                 })
 
+                # When the LLM has declared a multi-agent plan (multiple
+                # agents + a team, not a single agent), build_agent/
+                # modify_agent no longer end the loop on their own — the
+                # loop only terminates once create_team succeeds, so the
+                # LLM can chain several build_agent calls in one turn.
+                # Ordinary single-agent requests are unaffected: this only
+                # activates when declare_multi_agent_plan was called first.
+                multi_agent_active = getattr(self.tool_executor, "_multi_agent_plan_active", False)
+                is_terminal = (name == "create_team") if multi_agent_active else (name in TERMINAL_TOOLS)
+
                 # Terminal tools: break loop, get summary
-                if name in TERMINAL_TOOLS and isinstance(result, dict) and not result.get("error") and result.get("outcome") != "FAIL":
+                if is_terminal and isinstance(result, dict) and not result.get("error") and result.get("outcome") != "FAIL":
                     messages.append({
                         "role": "tool", "tool_call_id": tc_id,
                         "content": json.dumps(result, default=str) if not isinstance(result, str) else result,
@@ -769,7 +816,7 @@ class Orchestrator:
                             "actions": actions_taken}
 
                 # If terminal tool FAILED, let the LLM know and continue
-                if name in TERMINAL_TOOLS and isinstance(result, dict) and (result.get("error") or result.get("outcome") == "FAIL"):
+                if is_terminal and isinstance(result, dict) and (result.get("error") or result.get("outcome") == "FAIL"):
                     error_msg = result.get("error", "Operation failed")
                     messages.append({
                         "role": "tool", "tool_call_id": tc_id,

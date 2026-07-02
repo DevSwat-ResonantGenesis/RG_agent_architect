@@ -19,12 +19,35 @@ class ToolExecutor:
         self._user_api_keys = None
         self._preferred_provider = ""
         self._preferred_model = ""
+        # Set True for the rest of this turn once declare_multi_agent_plan
+        # is called — lets the orchestrator's loop chain multiple
+        # build_agent calls + create_team instead of stopping after the
+        # first agent. Reset every turn in Orchestrator._run_loop().
+        self._multi_agent_plan_active = False
 
     async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
         handler = getattr(self, f"_tool_{tool_name}", None)
         if not handler:
             raise ValueError(f"Unknown tool: {tool_name}")
         return await handler(arguments)
+
+    async def _tool_declare_multi_agent_plan(self, a):
+        """Called BEFORE building any agents when the user's request needs a
+        coordinated team (multiple distinct roles), not a single agent.
+        Keeps the ReAct loop open across several build_agent calls +
+        create_team, instead of stopping after the first agent."""
+        self._multi_agent_plan_active = True
+        agents = a.get("agents", [])
+        return {
+            "outcome": "SUCCESS",
+            "acknowledged": True,
+            "planned_agents": [ag.get("name", "?") for ag in agents] if isinstance(agents, list) else [],
+            "message": (
+                f"Multi-agent plan declared for team '{a.get('team_name', '')}': "
+                f"{len(agents) if isinstance(agents, list) else 0} agents. "
+                f"Now build each with build_agent, then wire them with create_team."
+            ),
+        }
 
     # ── Workspace ──
     async def _tool_workspace_snapshot(self, a): return await self.ws_db.get_snapshot()
@@ -776,7 +799,30 @@ class ToolExecutor:
     async def _tool_list_teams(self, a):
         return await self._engine_api("GET", "/teams")
     async def _tool_create_team(self, a):
-        return await self._engine_api("POST", "/teams", a)
+        result = await self._engine_api("POST", "/teams", a)
+        self._multi_agent_plan_active = False
+        member_ids = a.get("member_agent_ids") or []
+        if not member_ids or not isinstance(result, dict) or result.get("error"):
+            return result
+        statuses = []
+        for agent_id in member_ids:
+            member = await self.ws_db.get_agent(agent_id)
+            status = (member or {}).get("status", "unknown")
+            statuses.append({
+                "agent_id": agent_id,
+                "name": (member or {}).get("name", agent_id),
+                "status": status,
+            })
+        active_count = sum(1 for s in statuses if s["status"] == "active")
+        needs_attention = [s for s in statuses if s["status"] == "needs_attention"]
+        result["member_status_summary"] = {
+            "total": len(statuses),
+            "active": active_count,
+            "needs_attention": [{"agent_id": s["agent_id"], "name": s["name"]} for s in needs_attention],
+            "members": statuses,
+        }
+        result["team_ready"] = active_count == len(statuses)
+        return result
     async def _tool_get_team(self, a):
         return await self._engine_api("GET", f"/teams/{a['team_id']}")
     async def _tool_update_team(self, a):

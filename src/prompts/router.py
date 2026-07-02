@@ -340,6 +340,9 @@ _KEYWORD_MAP = {
     "fix": ["diagnose"], "broken": ["diagnose"], "failing": ["diagnose"],
     "status": ["review"], "list": ["review"], "show": ["review"],
     "all companies": ["scope_risk"], "every": ["scope_risk"],
+    "team": ["team_dispatching"], "pipeline": ["team_dispatching"],
+    "coordinate": ["team_dispatching"], "workflow": ["team_dispatching"],
+    "multiple agents": ["team_dispatching"], "several agents": ["team_dispatching"],
 }
 
 
@@ -359,7 +362,7 @@ def _fallback_select(message: str, mode: str) -> List[str]:
 
     # Build intents get standard modules
     if any(w in msg_lower for w in ("build", "create", "make")):
-        for m in ("goal_crafting", "dispatching", "tool_synergies", "models_config"):
+        for m in ("goal_crafting", "dispatching", "tool_synergies", "models_config", "team_dispatching"):
             scores[m] = scores.get(m, 0) + 0.2
 
     sorted_mods = sorted(scores.items(), key=lambda x: -x[1])
