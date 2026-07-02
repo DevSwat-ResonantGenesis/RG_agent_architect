@@ -916,7 +916,15 @@ class ToolExecutor:
         opts = a.get("options", "")
         if isinstance(opts, str):
             opts = [o.strip() for o in opts.split(",") if o.strip()]
-        return {"type": "PickOne", "question": a.get("question", ""), "options": opts}
+        kind = a.get("kind", "buttons")
+        if kind not in ("buttons", "tabs", "checkbox"):
+            kind = "buttons"
+        return {
+            "type": "PickMany" if kind == "checkbox" else "PickOne",
+            "question": a.get("question", ""),
+            "options": opts,
+            "kind": kind,
+        }
     async def _tool_file(self, a):
         from src.services.file_ops.file_manager import FileManager
         return await FileManager(self.workspace_id).execute(a.get("action","list"), a)
