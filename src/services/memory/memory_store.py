@@ -18,13 +18,8 @@ class MemoryStore:
     # ── User Memory (Hash Sphere — user level) ──
 
     async def get_user_memory(self) -> Dict[str, Any]:
-        """Get user-level hash sphere memory."""
-        result = await self._post("/memory/hash-sphere/search", {
-            "query": "user preferences and facts",
-            "user_id": self.workspace_id,
-            "scope": "user",
-            "limit": 20,
-        })
+        """Get user-level hash sphere memory (full brain: extract + facts)."""
+        result = await self._extract("user preferences and facts", scope="user", limit=20)
         return result or {}
 
     async def update_user_memory(self, content: str) -> Dict:
@@ -42,13 +37,7 @@ class MemoryStore:
         """Get agent-specific hash sphere memory."""
         if not self.agent_id:
             return {}
-        result = await self._post("/memory/hash-sphere/search", {
-            "query": "agent learnings and context",
-            "agent_id": self.agent_id,
-            "user_id": self.workspace_id,
-            "scope": "agent",
-            "limit": 20,
-        })
+        result = await self._extract("agent learnings and context", scope="agent", limit=20)
         return result or {}
 
     async def store_agent_learning(self, content: str, run_id: str = "") -> Dict:
@@ -209,18 +198,60 @@ class MemoryStore:
         This is what makes the architect a real agent — it remembers and learns.
         """
         user_mem = await self.get_user_memory()
-        insights = await self._post("/memory/hash-sphere/search", {
-            "query": "architect insights patterns preferences",
-            "user_id": self.workspace_id,
-            "scope": "user",
-            "limit": 15,
-        })
+        insights = await self._extract(
+            "architect insights patterns preferences", scope="user", limit=15
+        )
+        facts = await self.get_facts()
         return {
             "user_memory": user_mem,
             "architect_insights": insights,
+            "facts": facts,
         }
 
-    # ── Internal HTTP helper ──
+    # ── Full Brain Retrieval (hash-sphere/extract + facts) ──
+
+    async def recall(self, query: str, scope: str = "", limit: int = 10) -> Dict[str, Any]:
+        """Full hash-sphere brain recall: 12-D gravity + anchors + mesh +
+        rerank + fact injection + multi-hop graph, with RAG fallback."""
+        return await self._extract(query, scope=scope, limit=limit)
+
+    async def get_facts(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get crystallized facts the memory has extracted about this user/agent."""
+        params = {"user_id": self.workspace_id, "limit": limit}
+        if self.agent_id:
+            params["agent_id"] = self.agent_id
+        data = await self._get("/memory/facts", params)
+        return data.get("facts", []) if data else []
+
+    async def _extract(self, query: str, scope: str = "", limit: int = 10) -> Dict[str, Any]:
+        """Call the full hash-sphere/extract brain endpoint."""
+        body = {
+            "query": query,
+            "user_id": self.workspace_id,
+            "limit": limit,
+            "use_anchors": True,
+            "use_proximity": True,
+            "use_resonance": True,
+            "use_rag_fallback": True,
+        }
+        if self.agent_id:
+            body["agent_id"] = self.agent_id
+        if scope:
+            body["scope"] = scope
+        return await self._post("/memory/hash-sphere/extract", body)
+
+    # ── Internal HTTP helpers ──
+
+    async def _get(self, path: str, params: Dict) -> Dict:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(f"{self.base}{path}", params=params)
+                if r.status_code == 200:
+                    return r.json()
+                logger.warning(f"[Memory] GET {path} → {r.status_code}")
+        except Exception as e:
+            logger.warning(f"[Memory] GET {path} failed: {e}")
+        return {}
 
     async def _post(self, path: str, body: Dict) -> Dict:
         try:
