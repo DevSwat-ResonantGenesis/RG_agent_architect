@@ -61,14 +61,19 @@ class WorkspaceDB:
         broken agent never gets full platform access (DSID registration)
         just for having been saved.
         """
-        provider = model.split("/")[0] if "/" in model else ""
-        model_name = model.split("/", 1)[1] if "/" in model else model
+        # get_agent() hands back provider/model as separate fields (that's how
+        # Agent Engine stores them), so a caller that round-trips agent.get("model")
+        # back in here — or relies on this method's own default — passes a bare
+        # model name with no "/". Only set "provider" when we can actually derive
+        # one from a combined "provider/model" string; otherwise omit it so this
+        # PATCH doesn't wipe out the agent's existing provider.
+        has_provider_prefix = "/" in model
+        model_name = model.split("/", 1)[1] if has_provider_prefix else model
         payload = {
             "name": name,
             "description": goal,
             "goal": goal,
             "system_prompt": system_prompt or f"You are {name}. {goal}",
-            "provider": provider,
             "model": model_name,
             "temperature": temperature,
             "max_tokens": 128000,
@@ -80,6 +85,8 @@ class WorkspaceDB:
             "provider_temporary_reason": provider_temporary_reason,
             "ideal_provider": ideal_provider,
         }
+        if has_provider_prefix:
+            payload["provider"] = model.split("/")[0]
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 # Try PATCH first (update existing) — don't reset status/DSID

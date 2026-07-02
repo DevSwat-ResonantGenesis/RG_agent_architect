@@ -366,6 +366,18 @@ class Builder:
         if remove_tools:
             current_tools = [t for t in current_tools if t not in remove_tools]
 
+        # get_agent() returns provider/model as separate fields (that's how Agent
+        # Engine stores them), but save_agent() expects a combined "provider/model"
+        # string and re-derives provider by splitting on "/". Recombine them here —
+        # otherwise a bare model name round-trips with no "/", save_agent computes
+        # provider="", and every modify_agent call silently wipes the agent's provider.
+        existing_provider = agent.get("provider", "")
+        existing_model = agent.get("model", "")
+        existing_model_combined = (
+            f"{existing_provider}/{existing_model}" if existing_provider and existing_model
+            else existing_model or "groq/llama-3.3-70b-versatile"
+        )
+
         save_result = await self.ws_db.save_agent(
             agent_id=agent_id,
             name=updates.get("name", agent["name"]),
@@ -376,7 +388,7 @@ class Builder:
             needs_build=False,
             max_loops=updates.get("max_loops", agent.get("max_loops", 30)),
             temperature=updates.get("temperature", agent.get("temperature", 0.5)),
-            model=updates.get("model", agent.get("model", "groq/llama-3.3-70b-versatile")),
+            model=updates.get("model", existing_model_combined),
         )
         if not save_result.get("saved", False):
             return {"error": f"Modify failed: {save_result.get('error', 'unknown')}",
