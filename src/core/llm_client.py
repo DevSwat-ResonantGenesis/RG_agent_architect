@@ -16,11 +16,15 @@ from src.core.config import LLM_SERVICE_URL
 
 logger = logging.getLogger(__name__)
 
-# Model defaults — use known-working TokenRouter models with provider prefix.
-# These models are verified working in the TokenRouter catalog.
-DEFAULT_MODEL = "tokenrouter/google/gemini-3-flash-preview"
-FAST_MODEL = "tokenrouter/qwen/qwen3.5-flash"
-REASONING_MODEL = "tokenrouter/anthropic/claude-opus-4.7"
+# No hardcoded model ids. Empty = "no preference" → the shared rg_llm client
+# picks the best AVAILABLE provider for the task (provider-agnostic task-based
+# routing, using each provider's own computed-cheapest default_model) and
+# honors any explicit user preferred_provider/preferred_model. Hardcoding model
+# snapshot ids here rots every time a provider retires one (see the repeated
+# "default model retired" incidents), so we defer to the live catalog instead.
+DEFAULT_MODEL = ""
+FAST_MODEL = ""
+REASONING_MODEL = ""
 
 _client = UnifiedLLMClient()
 
