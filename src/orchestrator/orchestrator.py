@@ -17,7 +17,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from src.core.config import HISTORY_DEPTH, ORCHESTRATOR_MAX_ITERATIONS, MAX_TOKENS
 from src.core.context import fetch_workspace_context
-from src.core.llm_client import call_llm, call_llm_stream, resolve_model, DEFAULT_MODEL
+from src.core.llm_client import call_llm, call_llm_stream, resolve_model, DEFAULT_MODEL, get_live_model_hint
 from src.models.agent import OperationMode
 from src.models.tools import ORCHESTRATOR_TOOLS
 from src.orchestrator.build_pipeline import BuildPipeline
@@ -637,6 +637,38 @@ class Orchestrator:
         for _grp, _tnames in TOOL_GROUPS.items():
             for _tn in _tnames:
                 _tool_to_group[_tn] = _grp
+
+        # Swap the "model" param's hardcoded example string for a live, real,
+        # currently-working one — rebuild the affected tool dicts rather than
+        # mutating ORCHESTRATOR_TOOLS in place, since that list is a shared
+        # module-level singleton reused across every request/user.
+        _MODEL_HINT_TOOLS = {"build_agent", "modify_agent", "update_agent_config"}
+        if any(t["function"]["name"] in _MODEL_HINT_TOOLS for t in selected_tools):
+            try:
+                live_hint = await get_live_model_hint()
+                selected_tools = [
+                    {
+                        **t,
+                        "function": {
+                            **t["function"],
+                            "parameters": {
+                                **t["function"]["parameters"],
+                                "properties": {
+                                    **t["function"]["parameters"]["properties"],
+                                    "model": {
+                                        **t["function"]["parameters"]["properties"]["model"],
+                                        "description": f"LLM model as 'provider/model' — currently working examples: {live_hint} — leave unset to let the platform pick a verified-working one",
+                                    },
+                                },
+                            },
+                        },
+                    }
+                    if t["function"]["name"] in _MODEL_HINT_TOOLS and "model" in t["function"]["parameters"]["properties"]
+                    else t
+                    for t in selected_tools
+                ]
+            except Exception as e:
+                logger.warning(f"[Orch] Live model hint injection failed, using static tool schema: {e}")
 
         messages = [{"role": "system", "content": system_content}]
         # For REVIEW mode, trim old history aggressively — user is asking a new question

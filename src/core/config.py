@@ -15,6 +15,7 @@ GATEWAY_URL = os.getenv("GATEWAY_URL", "http://gateway:8000")
 SANDBOX_RUNNER_URL = os.getenv("SANDBOX_RUNNER_URL", "http://sandbox_runner_service:9001")
 AST_ANALYSIS_URL = os.getenv("AST_ANALYSIS_SERVICE_URL", "http://rg_ast_analysis:8000")
 ED_SERVICE_URL = os.getenv("ED_SERVICE_URL", "http://ed_service:8000")
+LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://llm_service:8000")
 
 # ── Orchestrator tuning ──
 ORCHESTRATOR_MAX_ITERATIONS = 30

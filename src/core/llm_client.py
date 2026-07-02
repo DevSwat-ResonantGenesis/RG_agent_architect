@@ -6,9 +6,13 @@ Handles multi-provider fallback, BYOK keys, streaming, and tool calling.
 import asyncio
 import inspect
 import logging
+import time
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
+import httpx
 from rg_llm import UnifiedLLMClient, LLMRequest, LLMStreamEvent, StreamEventType, ideal_provider_for
+
+from src.core.config import LLM_SERVICE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +23,41 @@ FAST_MODEL = "tokenrouter/qwen/qwen3.5-flash"
 REASONING_MODEL = "tokenrouter/anthropic/claude-opus-4.7"
 
 _client = UnifiedLLMClient()
+
+_LIVE_MODEL_HINT_FALLBACK = "groq/llama-3.3-70b-versatile, openai/gpt-4o, anthropic/claude-sonnet-4-6"
+_LIVE_MODEL_HINT_TTL = 120.0
+_live_model_hint_cache: Dict[str, Any] = {"text": "", "ts": 0.0}
+
+
+async def get_live_model_hint() -> str:
+    """Short 'provider/model' example string built from LLM Service's real
+    provider-liveness check (same source Anthropic key rotations etc. get
+    verified against), so the architect's tool schemas never steer it toward
+    a model that's since been retired — a static hardcoded example rots the
+    same way the old per-service model whitelists did. Cached since this can
+    be called on every architect turn; falls back to a static example on
+    any failure so a live-service hiccup never blocks tool calling.
+    """
+    now = time.monotonic()
+    if _live_model_hint_cache["text"] and now - _live_model_hint_cache["ts"] < _LIVE_MODEL_HINT_TTL:
+        return _live_model_hint_cache["text"]
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{LLM_SERVICE_URL}/llm/providers")
+        if resp.status_code != 200:
+            return _LIVE_MODEL_HINT_FALLBACK
+        examples = [
+            f"{p['id']}/{p['model']}"
+            for p in resp.json().get("providers", [])
+            if p.get("available") and p.get("model")
+        ]
+        text = ", ".join(examples) if examples else _LIVE_MODEL_HINT_FALLBACK
+        _live_model_hint_cache["text"] = text
+        _live_model_hint_cache["ts"] = now
+        return text
+    except Exception as e:
+        logger.warning(f"[LiveModelHint] fetch failed, using static fallback: {e}")
+        return _LIVE_MODEL_HINT_FALLBACK
 
 
 def _parse_provider_model(model_str: str):
