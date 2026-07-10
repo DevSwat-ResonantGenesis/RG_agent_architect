@@ -751,9 +751,37 @@ class ToolExecutor:
     # ── Agent Mode ──
     async def _tool_set_agent_mode(self, a):
         return await self._engine_api("PATCH", f"/{a['agent_id']}/mode",
-                                       {"mode": a.get("mode", "smart")})
+                                       {"mode": a.get("mode", "governed")})
     async def _tool_unarchive_agent(self, a):
         return await self._engine_api("PATCH", f"/{a['agent_id']}/unarchive")
+
+    async def _tool_set_agent_safety_limits(self, a):
+        """Directly override an agent's loop/token/rate limits via the generic PATCH endpoint."""
+        agent = await self.ws_db.get_agent(a["agent_id"])
+        if not agent:
+            return {"error": "Agent not found"}
+        safety_config = dict(agent.get("safety_config") or {})
+        if a.get("max_loops") is not None:
+            safety_config["max_loops"] = int(a["max_loops"])
+        if a.get("max_tokens_per_run") is not None:
+            safety_config["max_tokens_per_run"] = int(a["max_tokens_per_run"])
+        if a.get("max_runs_per_day") is not None:
+            safety_config["max_runs_per_day"] = int(a["max_runs_per_day"])
+        return await self._engine_api("PATCH", f"/{a['agent_id']}", {"safety_config": safety_config})
+
+    async def _tool_set_agent_tool_config(self, a):
+        """Merge (or replace) a single tool's config within an agent's tool_config."""
+        agent = await self.ws_db.get_agent(a["agent_id"])
+        if not agent:
+            return {"error": "Agent not found"}
+        tool_config = dict(agent.get("tool_config") or {})
+        tool_config[a["tool_name"]] = a["config"] if a.get("replace") else {
+            **(tool_config.get(a["tool_name"]) or {}), **a["config"],
+        }
+        return await self._engine_api("PATCH", f"/{a['agent_id']}", {"tool_config": tool_config})
+
+    async def _tool_set_agent_autonomous(self, a):
+        return await self._engine_api("PATCH", f"/{a['agent_id']}", {"autonomous": bool(a["autonomous"])})
 
     # ── Templates ──
     async def _tool_list_templates(self, a):

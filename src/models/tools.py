@@ -237,10 +237,27 @@ ORCHESTRATOR_TOOLS = [
     _t("get_agent_versions", "Get version history for an agent.",
        {"agent_id": {"type": "string"}}, ["agent_id"]),
     # ── Agent Mode ──
-    _t("set_agent_mode", "Change agent mode: smart, autonomous, manual.",
-       {"agent_id": {"type": "string"}, "mode": {"type": "string"}}, ["agent_id", "mode"]),
+    _t("set_agent_mode", "Change agent's safety envelope: 'governed' (tight limits, safest default), "
+       "'supervised' (moderate limits), or 'unbounded' (max loops/tokens, use only when the user explicitly "
+       "wants a long-running/high-autonomy agent). This does NOT change which tools are available.",
+       {"agent_id": {"type": "string"}, "mode": {"type": "string", "enum": ["governed", "supervised", "unbounded"]}},
+       ["agent_id", "mode"]),
     _t("unarchive_agent", "Restore an archived agent.",
        {"agent_id": {"type": "string"}}, ["agent_id"]),
+    _t("set_agent_safety_limits", "Override an agent's own loop/token/rate limits directly, independent of mode "
+       "presets. Use when the user asks for a specific number (e.g. 'let it loop up to 500 times').",
+       {"agent_id": {"type": "string"}, "max_loops": {"type": "integer"},
+        "max_tokens_per_run": {"type": "integer"}, "max_runs_per_day": {"type": "integer"}}, ["agent_id"]),
+    _t("set_agent_tool_config", "Set/merge per-tool configuration for an agent (e.g. which TTS voices "
+       "generate_audio is allowed to use). Merges into existing tool_config, does not replace it wholesale "
+       "unless replace=true.",
+       {"agent_id": {"type": "string"}, "tool_name": {"type": "string"},
+        "config": {"type": "object", "description": "Arbitrary config object for this tool"},
+        "replace": {"type": "boolean"}}, ["agent_id", "tool_name", "config"]),
+    _t("set_agent_autonomous", "Enable or disable true autonomous mode for an agent — when enabled, the "
+       "autonomous daemon can self-trigger this agent to run without a user-initiated session. Only enable "
+       "when the user explicitly asks for a self-running/background agent.",
+       {"agent_id": {"type": "string"}, "autonomous": {"type": "boolean"}}, ["agent_id", "autonomous"]),
     # ── Templates ──
     _t("list_templates", "List all available agent templates."),
     _t("instantiate_template", "Create a new agent from a template.",
