@@ -78,7 +78,11 @@ class WorkspaceDB:
             "temperature": temperature,
             "max_tokens": 128000,
             "tools": tools or [],
-            "safety_config": {"max_loops": max_loops, "max_tokens_per_run": 500000},
+            # No safety_config override here — leaving it unset lets new agents
+            # inherit RG_Agent_Engine's global MAX_LOOP_ITERATIONS/MAX_TOKENS_PER_RUN
+            # (currently much higher than the small per-agent defaults this used to
+            # hardcode) instead of getting silently capped below the platform default,
+            # and avoids this PATCH stomping any custom safety_config on agent updates.
             "is_active": True,
             "status": "draft",
             "provider_is_temporary": provider_is_temporary,
