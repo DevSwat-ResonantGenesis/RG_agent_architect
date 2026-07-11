@@ -146,6 +146,12 @@ class Orchestrator:
                 now = now_utc
                 tz_label = "UTC"
         parts.append(f"CURRENT DATE: {now.strftime('%Y-%m-%d %H:%M')} {tz_label} (year {now.year})")
+        if self._client_timezone:
+            parts.append(
+                f"USER'S TIMEZONE: {self._client_timezone} — this IS the user's real timezone "
+                f"(from their browser). Use it directly for any scheduling/cron/trigger setup. "
+                f"Never ask the user what timezone they're in."
+            )
 
         ws = self.context.get("workspace", {})
         agents = ws.get("agents", [])
