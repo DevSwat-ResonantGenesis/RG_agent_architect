@@ -69,6 +69,7 @@ class Orchestrator:
         self._is_superuser: bool = False
         self._unlimited_credits: bool = False
         self._user_role: str = "user"
+        self._client_timezone: str = ""
         # Build pipeline state — persists across messages
         self._pipeline: Optional[BuildPipeline] = None
         self._pipeline_phase: Optional[str] = None  # waiting_confirm, waiting_prompt_review, etc.
@@ -129,9 +130,22 @@ class Orchestrator:
             return ""
         parts = []
 
-        # Current date/time so the LLM always knows when "now" is
-        now = datetime.now(timezone.utc)
-        parts.append(f"CURRENT DATE: {now.strftime('%Y-%m-%d %H:%M UTC')} (year {now.year})")
+        # Current date/time so the LLM always knows when "now" is — in the
+        # user's own timezone when we have it, instead of always UTC (which
+        # meant the architect had to ask the user for their timezone every
+        # time it needed to schedule something).
+        now_utc = datetime.now(timezone.utc)
+        tz_label = "UTC"
+        now = now_utc
+        if self._client_timezone:
+            try:
+                from zoneinfo import ZoneInfo
+                now = now_utc.astimezone(ZoneInfo(self._client_timezone))
+                tz_label = self._client_timezone
+            except Exception:
+                now = now_utc
+                tz_label = "UTC"
+        parts.append(f"CURRENT DATE: {now.strftime('%Y-%m-%d %H:%M')} {tz_label} (year {now.year})")
 
         ws = self.context.get("workspace", {})
         agents = ws.get("agents", [])

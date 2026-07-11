@@ -82,6 +82,7 @@ class MessageRequest(BaseModel):
     user_api_keys: Dict = {}  # BYOK keys forwarded from chat service
     preferred_provider: str = ""  # user-selected provider override, forwarded from chat service
     preferred_model: str = ""  # user-selected model override, forwarded from chat service
+    client_timezone: str = ""  # IANA tz from the user's browser, forwarded from chat service
 
 class RunEventRequest(BaseModel):
     workspace_id: str
@@ -131,6 +132,7 @@ async def handle_message(req: MessageRequest, request: Request):
         orch._user_api_keys = req.user_api_keys
     orch._preferred_provider = req.preferred_provider
     orch._preferred_model = req.preferred_model
+    orch._client_timezone = req.client_timezone
     _apply_auth_context(orch, request)
     _inject_conversation_history(orch, req)
     return await orch.handle_message(req.message)
@@ -151,6 +153,7 @@ async def handle_message_stream(req: MessageRequest, request: Request):
         print("[Architect] WARNING: No BYOK keys received from chat service", flush=True)
     orch._preferred_provider = req.preferred_provider
     orch._preferred_model = req.preferred_model
+    orch._client_timezone = req.client_timezone
     _apply_auth_context(orch, request)
     _inject_conversation_history(orch, req)
 
