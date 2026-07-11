@@ -278,7 +278,13 @@ class WorkspaceDB:
 
     async def set_trigger(self, agent_id: str, interval: str = "daily",
                           timezone: str = "UTC", **kw) -> Dict:
-        """Create a trigger/schedule via Agent Engine API."""
+        """Create a cron schedule for an agent via Agent Engine API.
+
+        NOTE: this used to POST /agents/{agent_id}/triggers, which was never
+        implemented as a real route (only ever existed in tool catalogs/docs)
+        — guaranteed 404 every time. /agents/{agent_id}/schedules is the real,
+        working endpoint (same one create_schedule uses); route there instead.
+        """
         # Map simple intervals to cron expressions
         cron_map = {
             "minutely": "* * * * *",
@@ -286,22 +292,24 @@ class WorkspaceDB:
             "daily": "0 9 * * *",
             "weekly": "0 9 * * 1",
         }
+        cron_expression = cron_map.get(interval, "0 9 * * *")
+        goal = kw.get("goal") or f"Scheduled {interval} run"
         payload = {
-            "trigger_type": "cron",
-            "cron_expression": cron_map.get(interval, "0 9 * * *"),
+            "name": kw.get("name") or f"{interval.capitalize()} schedule ({cron_expression})",
+            "goal": goal,
+            "cron_expression": cron_expression,
             "timezone": timezone,
-            "enabled": True,
         }
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
-                    f"{AGENT_ENGINE_URL}/agents/{agent_id}/triggers",
+                    f"{AGENT_ENGINE_URL}/agents/{agent_id}/schedules",
                     headers=self._headers, json=payload,
                 )
                 if resp.status_code in (200, 201):
                     data = resp.json()
-                    return {"trigger_id": data.get("id", ""), "agent_id": agent_id, "interval": interval}
-                return {"error": f"Trigger creation failed: {resp.status_code}"}
+                    return {"schedule_id": data.get("id", ""), "agent_id": agent_id, "interval": interval}
+                return {"error": f"Schedule creation failed: {resp.status_code} {resp.text[:200]}"}
         except Exception as e:
             logger.error(f"[WorkspaceDB] set_trigger error: {e}")
             return {"error": str(e)}

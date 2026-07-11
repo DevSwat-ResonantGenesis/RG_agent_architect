@@ -206,11 +206,17 @@ class ToolExecutor:
         """Create a cron schedule for an agent via Agent Engine."""
         import httpx
         from src.core.config import AGENT_ENGINE_URL
+        cron = a.get("cron", "0 9 * * *")
+        goal = a.get("goal", "")
+        # Agent Engine's ScheduleCreate requires "name" — the tool schema didn't
+        # expose it to the LLM at all, so create_schedule 422'd on every call.
+        # Now optional in the schema; auto-generate a sensible one if omitted.
+        name = a.get("name") or (f"{goal[:60]} ({cron})" if goal else f"Schedule ({cron})")
         payload = {
-            "cron_expression": a.get("cron", "0 9 * * *"),
-            "goal": a.get("goal", ""),
+            "name": name,
+            "cron_expression": cron,
+            "goal": goal,
             "timezone": a.get("timezone", "UTC"),
-            "enabled": True,
         }
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -713,13 +719,25 @@ class ToolExecutor:
         return await self._engine_api("DELETE", f"/schedules/{a['schedule_id']}")
 
     # ── Triggers & Webhooks ──
+    # /agents/{agent_id}/triggers was never implemented as a real route in
+    # Agent Engine (only ever existed in tool catalogs/docs) — these always
+    # 404'd. Webhook-style triggers are a genuinely separate, not-yet-built
+    # feature (unlike cron scheduling, which works via /schedules — see
+    # set_trigger/create_schedule). Fail honestly instead of a raw 404 so the
+    # LLM doesn't waste turns on a dead endpoint and can redirect the user to
+    # what actually works.
+    _TRIGGERS_NOT_IMPLEMENTED = {
+        "error": "Webhook triggers aren't implemented yet on this platform. "
+                 "For scheduled/recurring runs, use create_schedule or set_trigger "
+                 "(cron-based scheduling) instead.",
+    }
+
     async def _tool_create_trigger(self, a):
-        return await self._engine_api("POST", f"/{a['agent_id']}/triggers", a)
+        return dict(self._TRIGGERS_NOT_IMPLEMENTED)
     async def _tool_list_triggers(self, a):
-        return await self._engine_api("GET", f"/{a['agent_id']}/triggers")
+        return {"triggers": [], **self._TRIGGERS_NOT_IMPLEMENTED}
     async def _tool_fire_webhook_trigger(self, a):
-        return await self._engine_api("POST", f"/triggers/webhook/{a['trigger_id']}",
-                                       a.get("payload", {}))
+        return dict(self._TRIGGERS_NOT_IMPLEMENTED)
 
     # ── Anomaly Detection ──
     async def _tool_list_anomaly_triggers(self, a):

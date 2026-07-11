@@ -196,9 +196,17 @@ class Orchestrator:
         if connected:
             parts.append(f"CONNECTED: {', '.join(connected)}")
 
-        economy = self.context.get("economy", {})
-        if economy:
-            parts.append(f"PLAN: {economy.get('plan','free')} | CREDITS: {economy.get('credits_remaining',0)}")
+        # billing_service's UserEconomicState is a separate ledger that was never
+        # synced with auth_service's is_superuser/unlimited_credits flags, so an
+        # unlimited/superuser account still shows "free / 0 credits" here even
+        # though credit deduction is correctly bypassed elsewhere. Override the
+        # DISPLAY to match reality instead of the stale/unsynced billing record.
+        if self._is_superuser or self._unlimited_credits:
+            parts.append("PLAN: unlimited (superuser/unlimited account) | CREDITS: unlimited — never blocked")
+        else:
+            economy = self.context.get("economy", {})
+            if economy:
+                parts.append(f"PLAN: {economy.get('plan','free')} | CREDITS: {economy.get('credits_remaining',0)}")
 
         return "\n".join(parts)
 

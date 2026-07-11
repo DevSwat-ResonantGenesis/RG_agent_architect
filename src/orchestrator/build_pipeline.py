@@ -35,6 +35,13 @@ from src.knowledge.agent_recipes import get_recipe_context
 
 logger = logging.getLogger(__name__)
 
+# Provider keys in _user_api_keys that are LLM providers, not third-party
+# integrations — excluded when deriving the "connected integrations" list.
+_LLM_PROVIDER_KEYS = {
+    "anthropic", "openai", "google", "bedrock", "groq", "mistral",
+    "openrouter", "cohere", "azure", "azure-openai",
+}
+
 # Available models for user to pick from
 MODELS = {
     "groq/llama-3.3-70b-versatile": {"label": "Groq Llama 70B", "speed": "fast", "cost": "low", "best_for": "90% of tasks"},
@@ -94,14 +101,17 @@ class BuildPipeline:
                 logger.warning(f"[Pipeline] Credit check failed: {e}")
 
         async def _check_integrations():
+            # {AGENT_ENGINE_URL}/agents/integrations doesn't exist as a route (falls
+            # through to /agents/{agent_id} -> 400 Invalid agent_id, always caught,
+            # always leaving "integrations_connected": [] regardless of what's really
+            # connected). self._user_api_keys already holds the real BYOK+OAuth
+            # tokens fetched from auth_service's internal endpoint (Orchestrator.
+            # initialize_session) — derive the connected list from that instead of
+            # a second, broken HTTP call.
             try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    resp = await client.get(
-                        f"{AGENT_ENGINE_URL}/agents/integrations",
-                        headers=self.ws_db._headers,
-                    )
-                    if resp.status_code == 200:
-                        result["integrations"] = resp.json()
+                keys = self._user_api_keys or {}
+                connected = sorted(p for p in keys if p not in _LLM_PROVIDER_KEYS)
+                result["integrations"] = {"connected": connected}
             except Exception as e:
                 logger.warning(f"[Pipeline] Integration check failed: {e}")
 

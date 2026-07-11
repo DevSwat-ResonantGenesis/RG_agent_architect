@@ -132,7 +132,8 @@ ORCHESTRATOR_TOOLS = [
        {"agent_id": {"type": "string"},
         "cron": {"type": "string", "description": "Cron expression e.g. '0 9 * * *' for daily 9am, '0 * * * *' for hourly"},
         "goal": {"type": "string", "description": "Goal override for scheduled runs"},
-        "timezone": {"type": "string", "description": "Timezone e.g. UTC, America/New_York"}}, ["agent_id", "cron"]),
+        "timezone": {"type": "string", "description": "Timezone e.g. UTC, America/New_York"},
+        "name": {"type": "string", "description": "A short label for this schedule, e.g. 'Daily 9am digest' (optional — auto-generated from the goal if omitted)"}}, ["agent_id", "cron"]),
     # ── Session History ──
     _t("get_agent_sessions", "Get recent execution sessions/runs for an agent",
        {"agent_id": {"type": "string"}}, ["agent_id"]),
